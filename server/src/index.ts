@@ -13,8 +13,9 @@
  *   5. Socket.io            sharing the express session middleware
  *   6. capability schemas   published to Obligate once, fire-and-forget
  *   7. background workers   behind a Postgres advisory lock, so exactly ONE
- *                           replica runs the SLA ticker, the outbox drainer
- *                           and the rollup scheduler
+ *                           replica runs the SLA ticker, the outbox drainer,
+ *                           the rollup scheduler, the scheduled-rule sweep,
+ *                           the escalation ticker and the mail workers
  *   8. listen
  *   9. graceful shutdown
  */
@@ -33,33 +34,36 @@ import { logger } from './utils/logger';
 import { obligateService } from './services/obligate.service';
 import { outboxService } from './services/outbox.service';
 import { rollupService } from './services/rollup.service';
+import { slaTicker } from './services/sla.service';
+import { ruleScheduler } from './services/rule.service';
+import { escalationService } from './services/escalation.service';
+import { inboundService } from './services/mail/inbound.service';
+import { outboundService } from './services/mail/outbound.service';
 
 // ═════════════════════════════════════════════════════════════════════════════
-// Background workers — owned by other modules, loaded defensively
+// Background workers
 // ═════════════════════════════════════════════════════════════════════════════
 
 /**
- * The SLA ticker and the notification-outbox drainer live in `src/services/`,
- * which is written separately from this file. They are therefore loaded through
- * a dynamic import wrapped in try/catch against this minimal interface: if the
- * module is not there yet, the server logs one line and boots anyway.
+ * The shape every worker in `src/services/` presents to this file.
  *
- * That is deliberate. A server that refuses to start because an engine module
- * is missing gives the operator a stack trace where they wanted a login page,
- * and gives whoever is mid-refactor an unbootable tree. Real-time SLA warnings
- * degrade; the desk keeps working.
+ * They were once loaded by NAME through a dynamic import, because the engine
+ * modules were written separately from this one and might not exist yet. They
+ * all exist now, so every one of them is a LITERAL import: TypeScript then
+ * checks that `start()` and `stop()` are really there, and a rename breaks the
+ * build instead of silently logging "exports no { start() } worker" into a log
+ * nobody reads — which is the same reason `outboxService` and `rollupService`
+ * were always imported this way.
+ *
+ * Importing `rule.service` here has a second effect worth naming: the bottom of
+ * that module calls `installRulesEngine()` at import time, so the rules engine
+ * is installed on EVERY replica, including one running with
+ * DISABLE_BACKGROUND_WORKERS. That is correct — the engine runs inline on the
+ * request path; only the SCHEDULED sweep below belongs to the leader.
  */
 interface BackgroundWorker {
   start(): void | Promise<void>;
   stop?(): void | Promise<void>;
-}
-
-function looksLikeWorker(value: unknown): value is BackgroundWorker {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    typeof (value as BackgroundWorker).start === 'function'
-  );
 }
 
 /**
@@ -77,50 +81,17 @@ function looksLikeWorker(value: unknown): value is BackgroundWorker {
  * never calls `stop()` on something that never ran.
  */
 async function startWorker(
-  worker: BackgroundWorker | null,
+  worker: BackgroundWorker,
   label: string,
   registry: BackgroundWorker[],
   details: Record<string, unknown> = {},
 ): Promise<void> {
-  if (!worker) return;
   try {
     await worker.start();
     registry.push(worker);
     logger.info(details, `${label} started`);
   } catch (err) {
     logger.error({ err }, `${label} failed to start — the server continues without it`);
-  }
-}
-
-/**
- * Load a worker from `moduleSpec`, preferring the named exports listed. The
- * specifier is held in a variable on purpose: with a string literal TypeScript
- * would resolve the module at compile time and fail the build for a file that
- * does not exist yet, which is exactly the coupling this is avoiding.
- */
-async function loadWorker(
-  moduleSpec: string,
-  exportNames: readonly string[],
-  label: string,
-): Promise<BackgroundWorker | null> {
-  try {
-    const loaded = (await import(moduleSpec)) as Record<string, unknown>;
-    for (const name of exportNames) {
-      if (looksLikeWorker(loaded[name])) return loaded[name] as BackgroundWorker;
-    }
-    if (looksLikeWorker(loaded.default)) return loaded.default as BackgroundWorker;
-
-    logger.warn(
-      { module: moduleSpec, tried: exportNames },
-      `${label}: module loaded but exports no { start() } worker — skipping`,
-    );
-    return null;
-  } catch (err) {
-    logger.warn(
-      { module: moduleSpec, err: (err as Error).message },
-      `${label}: not available yet — the server will run without it`,
-    );
-    return null;
   }
 }
 
@@ -307,24 +278,16 @@ async function main(): Promise<void> {
   const workers: BackgroundWorker[] = [];
 
   const startWorkers = async (): Promise<void> => {
-    // The SLA ticker is the one worker still loaded by name: `sla.service.ts`
-    // is not written yet, so a literal `import()` would fail the BUILD rather
-    // than degrade at runtime, which is the whole point of `loadWorker`.
+    // The SLA ticker. `start()` is called with no arguments, so its interval
+    // falls back to `config.slaTickIntervalMs` inside the service — the detail
+    // below is what the log line reports, not what is passed.
     await startWorker(
-      await loadWorker(
-        './services/sla.service',
-        ['slaTicker', 'slaEngine', 'slaService'],
-        'SLA ticker',
-      ),
+      slaTicker,
       'SLA ticker',
       workers,
       { intervalMs: config.slaTickIntervalMs },
     );
 
-    // The outbox drainer and the rollup scheduler DO exist, so they are
-    // imported by literal specifier: TypeScript then checks that `start()` and
-    // `stop()` are really there, and a rename breaks the build instead of
-    // silently logging "exports no { start() } worker" into a log nobody reads.
     await startWorker(
       outboxService,
       'Outbox worker',
@@ -349,6 +312,48 @@ async function main(): Promise<void> {
       'Rollup scheduler',
       workers,
     );
+
+    // The scheduled-rule sweep — the ONLY thing that asks "has a `trigger:
+    // schedule` rule come due?". Without it the seeded `escalate_p1_after_15m`
+    // never fires at all, because nothing on the request path can notice the
+    // passage of time. Adapted rather than passed straight through so the
+    // interval comes from `config` (this file's contract is that config.ts is
+    // the one module that reads `process.env`) instead of from the service's
+    // own env fallback.
+    //
+    // It belongs under the leader lock: two replicas sweeping means every
+    // escalation the sweep triggers fires twice.
+    await startWorker(
+      {
+        start: () => ruleScheduler.start({ intervalMs: config.ruleScheduleIntervalMs }),
+        stop: () => ruleScheduler.stop(),
+      },
+      'Rule scheduler',
+      workers,
+      { intervalMs: config.ruleScheduleIntervalMs },
+    );
+
+    // The escalation ticker: armed ladders whose next step has come due, plus
+    // state-triggered ladders. The APPROVAL timeout and reminder sweeps ride
+    // this same tick, so this is the only extra worker the approval engine
+    // needs — there is no separate approval worker to start.
+    await startWorker(
+      escalationService,
+      'Escalation ticker',
+      workers,
+      { intervalMs: config.slaTickIntervalMs },
+    );
+
+    // Mail, both directions.
+    //   inbound   reconciles one IMAP connection per active mailbox from
+    //             `mail_accounts`; IDLE does the collecting between passes, so
+    //             this timer is a reconcile, not a poll of the mail server.
+    //   outbound  drains replies whose delivery is still pending after a
+    //             transient SMTP failure. Without it a temporary failure is a
+    //             permanent one until an admin presses "retry now" in the
+    //             channel console.
+    await startWorker(inboundService.worker, 'Inbound mail poller', workers);
+    await startWorker(outboundService.worker, 'Outbound mail drain', workers);
   };
 
   const leader = new LeaderLock(startWorkers);

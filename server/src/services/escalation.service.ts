@@ -91,7 +91,7 @@ const FIRES = 'escalation_fires';
 /**
  * HARD RULE 1 with a migration in flight.
  *
- * `escalation_runs` / `escalation_fires` arrive in `003_escalation_and_approval_runtime.ts`
+ * `escalation_runs` / `escalation_fires` arrive in `004_escalation_and_approval_runtime.ts`
  * and are not yet listed in `TENANT_SCOPED_TABLES` (that list lives in
  * `server/src/db/index.ts`, which this module does not own). `scoped()` refuses
  * a table it does not know, so this shim routes through `scoped()` the moment

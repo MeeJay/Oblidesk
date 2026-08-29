@@ -3,7 +3,8 @@
  *
  * ── The two tiers ───────────────────────────────────────────────────────────
  * GLOBAL routers run without a tenant: signing in, the SSO callback, the
- * platform configuration a master admin edits, the system page. They authorise
+ * platform configuration a master admin edits, the system page, the
+ * server-to-server ingests, and the requester portal. They authorise
  * themselves.
  *
  * TENANT routers run behind `requireAuth` + `requireTenant`, which means by the
@@ -37,6 +38,10 @@ import tenantsRoutes from './tenants.routes';
 // ── Machine-to-machine ──────────────────────────────────────────────────────
 import alertsRoutes from './alerts.routes';
 
+// ── Self-authorising: a provider webhook, and the requester portal ──────────
+import mailRoutes from './mail.routes';
+import portalRoutes from './portal.routes';
+
 // ── Tenant-scoped ───────────────────────────────────────────────────────────
 import usersRoutes from './users.routes';
 import teamsRoutes from './teams.routes';
@@ -51,6 +56,10 @@ import configObjectsRoutes from './configObjects.routes';
 import viewsRoutes from './views.routes';
 import dashboardRoutes from './dashboard.routes';
 import metricsRoutes from './metrics.routes';
+import slaRoutes from './sla.routes';
+import rulesRoutes from './rules.routes';
+import escalationRoutes from './escalation.routes';
+import approvalsRoutes from './approvals.routes';
 
 const router = Router();
 
@@ -91,6 +100,29 @@ router.use('/tenant', tenantsRoutes);
 // exactly when the desk is most needed.
 router.use('/alerts', ingestLimiter, alertsRoutes);
 
+// The mail channel. It is NOT in the session tier, and `mail.routes.ts` says so
+// in its own header: `POST /api/mail/webhook` is called server-to-server by a
+// provider that has no session and no tenant, exactly like the alert ingest, so
+// `requireTenant` in front of it would break intake. Every OTHER route in that
+// file therefore carries `requireAuth` + `requireTenant` + a capability of its
+// own, applied per route rather than with a `router.use()` at the top.
+//
+// The ingest bucket is scoped to the webhook PATH rather than to the whole
+// mount, which is the one place this differs from `/alerts`. `ingestLimiter` is
+// looser than the anonymous default, and `apiLimiter` skips a request that has
+// a session — so putting it on `/mail` would quietly make it the only limiter
+// on the signed-in mailbox-administration routes.
+router.use('/mail/webhook', ingestLimiter);
+router.use('/mail', mailRoutes);
+
+// The requester portal. Also outside the session tier, for the reason set out
+// at the top of `portal.routes.ts`: a portal contact is not an Oblidesk user.
+// They never set `req.session.userId` (so `requireAuth` would 401 every route
+// here) and they have no membership row (so `requireTenant` would have nothing
+// to resolve a tenant from). The guard is `requirePortalSession` inside the
+// router, which pins the tenant from the burned magic link instead.
+router.use('/portal', portalRoutes);
+
 // ═════════════════════════════════════════════════════════════════════════════
 // Tier 2 — tenant-scoped (requireAuth + requireTenant)
 // ═════════════════════════════════════════════════════════════════════════════
@@ -113,6 +145,20 @@ tenantRouter.use('/audit', auditRoutes);
 tenantRouter.use('/tickets', ticketsRoutes);
 tenantRouter.use('/journal', journalRoutes);
 tenantRouter.use('/attachments', attachmentsRoutes);
+
+// The clock and the engines that act on it. All four are ordinary tenant
+// routers: their handlers read `req.tenantId` and never name a tenant.
+//
+// Mounting `/rules` also INSTALLS the rules engine as a side effect — the
+// bottom of `rule.service.ts` calls `installRulesEngine()` at module scope,
+// which registers it against `ticket.service`'s hook points. That is not the
+// only path to it (`index.ts` imports the module directly for the scheduled
+// sweep), and it is not relied on: it is noted here so nobody removes this
+// mount and wonders why automation went quiet.
+tenantRouter.use('/sla', slaRoutes);
+tenantRouter.use('/rules', rulesRoutes);
+tenantRouter.use('/escalations', escalationRoutes);
+tenantRouter.use('/approvals', approvalsRoutes);
 
 // Configuration store and saved views.
 //

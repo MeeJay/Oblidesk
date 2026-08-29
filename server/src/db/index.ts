@@ -38,8 +38,8 @@ export const db = knex(knexConfig);
 
 /**
  * Tables whose `tenant_id` is NOT NULL. These are the tables `scoped()`
- * accepts. Keep in sync with migrations 001 and 002 — a table added there
- * with a NOT NULL tenant_id belongs in this list on the same commit.
+ * accepts. Keep in sync with the migrations — a table added there with a NOT
+ * NULL tenant_id belongs in this list on the same commit.
  */
 export const TENANT_SCOPED_TABLES = [
   // ── 001 core ──────────────────────────────────────────────────────────
@@ -113,6 +113,26 @@ export const TENANT_SCOPED_TABLES = [
   // ── 002 AI ────────────────────────────────────────────────────────────
   'ai_suggestions',
   'ai_usage_ledger',
+
+  // 003 (the SLA timer wheel) added columns to `sla_instances` and widened a
+  // CHECK on `sla_ledger`. It created no table, so it adds nothing here.
+
+  // ── 004 escalation runtime ────────────────────────────────────────────
+  // The DEFINITIONS are `config_objects` rows of kind 'escalation'; these two
+  // are the runtime. Both carry a NOT NULL tenant_id of their own —
+  // `escalation_fires` does NOT inherit isolation from `escalation_runs`,
+  // because the sweep reads fires by (tenant, ticket) without touching the
+  // run, and a child that is only reachable through its parent is the one
+  // shape `PARENT_SCOPED_TABLES` is for.
+  'escalation_runs',
+  'escalation_fires',
+
+  // ── 005 portal runtime ────────────────────────────────────────────────
+  // Magic-link tokens. Tenant-scoped and not global, unlike
+  // `password_reset_tokens`: a portal contact belongs to exactly one tenant,
+  // and looking a token hash up across tenants would be how a link minted for
+  // one desk opens a session on another.
+  'portal_login_tokens',
 ] as const;
 
 export type TenantScopedTable = (typeof TENANT_SCOPED_TABLES)[number];

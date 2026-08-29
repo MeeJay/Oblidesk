@@ -93,6 +93,17 @@ const AdminPermissionSetsPage = lazy(() =>
   import('@/pages/AdminPermissionSetsPage').then((m) => ({ default: m.AdminPermissionSetsPage })),
 );
 
+// The engines' own surfaces. Dashboards drags recharts in behind it, and both
+// the automation and the SLA editors carry a condition builder — none of it
+// belongs in the entry chunk.
+const DashboardsPage = lazy(() =>
+  import('@/pages/DashboardsPage').then((m) => ({ default: m.DashboardsPage })),
+);
+const AutomationPage = lazy(() =>
+  import('@/pages/AutomationPage').then((m) => ({ default: m.AutomationPage })),
+);
+const SlaPage = lazy(() => import('@/pages/SlaPage').then((m) => ({ default: m.SlaPage })));
+
 // ═════════════════════════════════════════════════════════════════════════════
 // Suspense
 // ═════════════════════════════════════════════════════════════════════════════
@@ -128,9 +139,11 @@ function PageLoader() {
 //   2 — the records that sit next to a ticket (assets, problems, changes)
 //   3 — self-service and the shape of a ticket (knowledge, catalog, fields,
 //       forms, the configuration studio)
-//   4 — the engines (automation, SLA policies, workflows, rules, channels)
+//   4 — the engines (workflows, rules, channels — automation and SLA have
+//       shipped and route to their own pages below)
 //   5 — the people and the money (on-call, team, time, contracts)
-//   6 — reading it all back (dashboards, reports, config portability)
+//   6 — reading it all back (reports, config portability — dashboards have
+//       shipped)
 // ═════════════════════════════════════════════════════════════════════════════
 
 interface PlannedModule {
@@ -147,13 +160,10 @@ const PLANNED_MODULES: readonly PlannedModule[] = [
   { path: '/changes', labelKey: 'nav.changes', label: 'Changements', phase: 2 },
   { path: '/knowledge', labelKey: 'nav.knowledge', label: 'Base de connaissances', phase: 3 },
   { path: '/catalog', labelKey: 'nav.catalog', label: 'Catalogue de services', phase: 3 },
-  { path: '/automation', labelKey: 'nav.automation', label: 'Automatisation', phase: 4 },
-  { path: '/sla', labelKey: 'nav.sla', label: 'SLA', phase: 4 },
   { path: '/oncall', labelKey: 'nav.oncall', label: 'Astreinte', phase: 5 },
   { path: '/team', labelKey: 'nav.team', label: 'Équipe', phase: 5 },
   { path: '/time', labelKey: 'nav.time', label: 'Temps', phase: 5 },
   { path: '/contracts', labelKey: 'nav.contracts', label: 'Contrats', phase: 5 },
-  { path: '/dashboards', labelKey: 'nav.dashboards', label: 'Tableaux de bord', phase: 6 },
   { path: '/reports', labelKey: 'nav.reports', label: 'Rapports', phase: 6 },
 ];
 
@@ -354,6 +364,44 @@ export default function App() {
                 </Page>
               }
             />
+
+            {/* ── Reading it back ───────────────────────────────────────── */}
+            <Route element={<ProtectedRoute requiredCapability={CAPABILITIES.REPORT_VIEW} />}>
+              {/* One route, optional slug — same reason as the ticket queue.
+                  `DashboardsPage` owns which board is on screen; remounting it
+                  on every board switch would re-fetch the whole catalogue and
+                  drop the widgets it has already resolved. */}
+              <Route
+                path="/dashboards/:slug?"
+                element={
+                  <Page>
+                    <DashboardsPage />
+                  </Page>
+                }
+              />
+            </Route>
+
+            {/* ── The engines ───────────────────────────────────────────── */}
+            <Route element={<ProtectedRoute requiredCapability={CAPABILITIES.AUTOMATION_ADMIN} />}>
+              <Route
+                path="/automation"
+                element={
+                  <Page>
+                    <AutomationPage />
+                  </Page>
+                }
+              />
+            </Route>
+            <Route element={<ProtectedRoute requiredCapability={CAPABILITIES.SLA_ADMIN} />}>
+              <Route
+                path="/sla"
+                element={
+                  <Page>
+                    <SlaPage />
+                  </Page>
+                }
+              />
+            </Route>
 
             {/* ── Planned modules ───────────────────────────────────────── */}
             {PLANNED_MODULES.map(({ path, labelKey, label, phase }) => (

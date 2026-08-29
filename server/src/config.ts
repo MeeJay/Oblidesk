@@ -43,6 +43,19 @@ function int(key: string, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+/**
+ * `int` with bounds, for the knobs where a plausible typo is worse than a
+ * missing value: `SLA_VERIFY_HOUR=25` never runs the verifier at all, and a
+ * scheduler interval of `0` is a spin loop. An out-of-range value falls back to
+ * the shipped default, exactly as an unparseable one already does — the reader
+ * cannot log (the logger reads this module), so the contract is "a bad value is
+ * the default", never "a bad value is honoured".
+ */
+function intInRange(key: string, fallback: number, min: number, max: number): number {
+  const value = int(key, fallback);
+  return value >= min && value <= max ? value : fallback;
+}
+
 function bool(key: string, fallback = false): boolean {
   const raw = process.env[key];
   if (raw === undefined || raw.trim() === '') return fallback;
@@ -153,10 +166,43 @@ export const config = {
   slaTickIntervalMs: int('SLA_TICK_INTERVAL_MS', 60_000),
   /** Notification outbox drain cadence. */
   outboxIntervalMs: int('OUTBOX_INTERVAL_MS', 5_000),
+  /**
+   * How often the scheduled-rule sweep looks for `trigger: schedule` rules that
+   * have come due. This is the SWEEP cadence, not a rule's own cadence — a rule
+   * that asks for "every 5 minutes" still fires every 5 minutes; this only
+   * bounds how late it can be. Named for the variable `rule.service.ts` already
+   * reads so the two cannot disagree.
+   */
+  ruleScheduleIntervalMs: intInRange('RULES_SCHEDULE_INTERVAL_MS', 60_000, 1_000, 60 * 60_000),
   /** How often a non-leader replica retries the boot advisory lock. */
   leaderRetryIntervalMs: int('LEADER_RETRY_INTERVAL_MS', 30_000),
   /** Set to `true` on a replica that must never run the tickers. */
   disableBackgroundWorkers: bool('DISABLE_BACKGROUND_WORKERS'),
+
+  // ── SLA engine tuning ─────────────────────────────────────────────────────
+  // These four were module constants in `sla.service.ts`. They are here because
+  // each of them is a POLICY an operator may legitimately disagree with, and
+  // "edit the source and rebuild" is not a way to disagree with a policy.
+  /**
+   * Local hour on the SERVER clock at which the nightly ledger verifier runs.
+   * It reads every live instance, so it wants the quiet hour of the install's
+   * own timezone — which is not 03:00 everywhere.
+   */
+  slaVerifyHour: intInRange('SLA_VERIFY_HOUR', 3, 0, 23),
+  /**
+   * A ticket the alert spine opened and auto-closed inside this window produced
+   * no human work, so it produces no SLA outcome. Raise it on a desk with a
+   * flappier monitor; lower it on one where a two-minute incident is real.
+   */
+  slaAlertAutoResolveGraceMs: intInRange('SLA_ALERT_AUTO_RESOLVE_GRACE_MS', 120_000, 0, 3_600_000),
+  /**
+   * A CI liveness reading older than this is not evidence, and the engine
+   * refuses to pause on `device_offline` rather than counting silently. It
+   * tracks the polling interval of whatever feeds `ci_state_cache`.
+   */
+  slaCiStateStaleAfterMs: intInRange('SLA_CI_STATE_STALE_AFTER_MS', 900_000, 60_000, 86_400_000),
+  /** Verifier drift beyond this is reported. Below it is float noise. */
+  slaDriftToleranceMs: intInRange('SLA_DRIFT_TOLERANCE_MS', 1_000, 0, 60_000),
 
   // ── Logging ───────────────────────────────────────────────────────────────
   logLevel: str('LOG_LEVEL', isDev ? 'debug' : 'info'),

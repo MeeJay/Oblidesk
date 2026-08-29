@@ -687,10 +687,35 @@ export type EscalationTrigger =
   | 'reopened'
   | 'priority';
 
+/**
+ * How `kind: 'on_call'` picks a member of the group named by `ref`. The choice
+ * is a pure function of the instant, so the `decision_log` row an escalation
+ * writes replays to the SAME person a year later — which a shift table read at
+ * fire time could never promise. Both halves are defaulted by the engine.
+ */
+export interface EscalationRotationSpec {
+  /** Length of one shift, in hours. Default 168 (one week). */
+  periodHours?: number;
+  /** ISO-8601 instant shift 0 began. Default the Unix epoch. */
+  anchor?: string;
+}
+
 export interface EscalationNotifyTarget {
-  kind: 'assignee' | 'assignment_group' | 'manager_of_assignee' | 'user' | 'channel' | 'requester';
+  kind:
+    | 'assignee'
+    | 'assignment_group'
+    | 'manager_of_assignee'
+    | 'user'
+    | 'channel'
+    | 'requester'
+    /** Rotate over the members of the assignment group named by `ref`. */
+    | 'on_call'
+    /** Everybody already watching the ticket. */
+    | 'watchers';
   /** Username / group slug / channel name — never a numeric id. */
   ref?: string;
+  /** `on_call` only. Omitted ⇒ the engine's weekly-from-the-epoch default. */
+  rotation?: EscalationRotationSpec | null;
 }
 
 export interface EscalationStepSpec {
@@ -702,12 +727,20 @@ export interface EscalationStepSpec {
   /** Repeat this step every `afterMinutes` until `stopWhen` becomes true. */
   repeat?: boolean;
   maxRepeats?: number;
+  /** Tone of the bell entry / notification this step raises. Default 'warning'. */
+  severity?: 'critical' | 'warning' | 'info';
+  /** Notification template this step renders (HARD RULE 3 — a slug). */
+  templateSlug?: string | null;
+  /** Author's name for the step, shown in the ladder editor and the Why drawer. */
+  label?: string;
 }
 
 export interface EscalationBody {
   trigger: EscalationTrigger;
   appliesWhen?: ConditionNode | null;
   steps: EscalationStepSpec[];
+  /** Ladder-wide default calendar (by SLUG); a step may override it. */
+  calendarSlug?: string | null;
   /** Cancel the whole ladder once this matches. */
   stopWhen?: ConditionNode | null;
   enabled: boolean;
@@ -735,6 +768,14 @@ export interface ApprovalStepSpec {
   dueMinutes?: number;
   calendarSlug?: string | null;
   onTimeout: 'approve' | 'reject' | 'escalate' | 'wait';
+  /**
+   * Ladder armed when `onTimeout === 'escalate'` (HARD RULE 3 — a slug).
+   * Falls back to the definition-wide `ApprovalBody.escalationSlug`; a step
+   * that escalates on timeout and names neither notifies nobody.
+   */
+  escalationSlug?: string | null;
+  /** Overrides the definition-wide reminder cadence for this step only. */
+  reminderMinutes?: number;
 }
 
 export interface ApprovalBody {
@@ -746,8 +787,25 @@ export interface ApprovalBody {
   allowDelegate: boolean;
   /** Remind pending approvers every N business minutes. */
   reminderMinutes?: number;
+  /** Default calendar every step's `dueMinutes` is measured on (by SLUG). */
+  calendarSlug?: string | null;
+  /** Default ladder for a step that escalates on timeout (by SLUG). */
+  escalationSlug?: string | null;
   /** Block the ticket from leaving its status while pending. */
   blocksTransitions?: boolean;
+  /**
+   * WHICH transitions a pending approval blocks. `blocksTransitions` on its own
+   * is a boolean that never says what it stops, so these two narrow it:
+   *
+   *   blockedStatusSlugs      destination statuses that are refused
+   *   blockedStatusCategories destination CATEGORIES that are refused (RULE 5)
+   *
+   * Both empty (the shipped default) blocks resolving and closing only — see
+   * `blocksThisMove()` in the approval engine for why that is the conservative
+   * reading and why "everything except cancelled" is not.
+   */
+  blockedStatusSlugs?: string[];
+  blockedStatusCategories?: StatusCategory[];
 }
 
 // ── Kind → body map ──────────────────────────────────────────────────────────
@@ -783,22 +841,42 @@ export type AnyConfigBody = ConfigBodyByKind[ConfigKind];
 /**
  * Which kinds may reference which other kinds, by slug. The config linter walks
  * this to flag a dangling `queueSlug` before an engine silently no-ops on it.
+ *
+ * This is a CATALOGUE, not a filter: an edge missing here does not stop the
+ * linter resolving the slug, it stops the linter knowing the reference was
+ * meant to exist — so the entry has to match what the shipped baseline and the
+ * body shapes above actually contain, kind by kind.
+ *
+ * What is deliberately NOT here: the queue baseline's `default_assignment_group`
+ * and `visible_to_groups`. Those name `assignment_groups` ROWS, not config
+ * objects; `assignment_group` is not a `ConfigKind` and this map cannot express
+ * it. The linter excludes them for the same reason (see its `REFERENCE_KEYS`).
  */
 export const CONFIG_KIND_REFERENCES: Readonly<Record<ConfigKind, readonly ConfigKind[]>> = {
   field: ['field'],
-  form: ['field'],
+  // The baseline's `incident_default` form names the state machine whose
+  // transitions its required-ness is enforced by (HARD RULE 12).
+  form: ['field', 'state_machine'],
   view: ['field'],
-  rule: ['queue', 'macro', 'approval', 'sla', 'notification_template', 'field'],
-  sla: ['calendar', 'escalation'],
+  // `RuleBody.actions` is the closed action catalogue: `escalate` carries an
+  // escalation slug like `apply_macro` carries a macro slug. `calendar` comes
+  // from `RuleBody.schedule.calendarSlug`.
+  rule: ['queue', 'macro', 'approval', 'sla', 'notification_template', 'field', 'escalation', 'calendar'],
+  // The baseline `standard` policy names a template per `notify_on` threshold.
+  sla: ['calendar', 'escalation', 'notification_template'],
   state_machine: ['field'],
-  queue: ['sla', 'calendar', 'form', 'state_machine'],
+  // The baseline queues carry `default_priority_matrix` alongside the other four.
+  queue: ['sla', 'calendar', 'form', 'state_machine', 'priority_matrix'],
   priority_matrix: ['sla'],
   alert_binding: ['queue', 'priority_matrix'],
   catalog_item: ['form', 'queue', 'approval', 'sla'],
   notification_template: [],
   dashboard: ['view'],
-  macro: ['field', 'queue', 'notification_template'],
+  // `MacroBody.actions` is the SAME closed catalogue as `RuleBody.actions`, so
+  // a macro reaches every kind an action can name.
+  macro: ['field', 'queue', 'notification_template', 'macro', 'approval', 'sla', 'escalation'],
   calendar: [],
   escalation: ['calendar', 'notification_template'],
-  approval: ['calendar'],
+  // `escalationSlug`, on the body and on a step that escalates on timeout.
+  approval: ['calendar', 'escalation'],
 };

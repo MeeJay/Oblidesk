@@ -82,7 +82,9 @@ export type ConfigLintCode =
   | 'sla_double_pause'
   | 'draft_reference'
   | 'undeclared_write'
-  | 'no_default';
+  | 'no_default'
+  /** An escalation step nothing can reach — `escalation.service`'s vocabulary. */
+  | 'unreachable_state';
 
 export interface ConfigLintFinding extends Omit<ConfigLintIssue, 'code'> {
   code: ConfigLintCode;
@@ -96,6 +98,7 @@ const CODE_FALLBACK: Readonly<Record<string, ConfigLintIssue['code']>> = {
   draft_reference: 'dangling_reference',
   undeclared_write: 'unknown_field',
   no_default: 'empty_condition',
+  unreachable_state: 'unreachable_status',
 };
 
 /** Narrow findings to the shared union for callers typed against it. */
@@ -446,12 +449,36 @@ export interface LintContext {
   usernames: Set<string>;
   /** Assignment group slug → member count (0 members = unreachable approver). */
   groups: Map<string, number>;
+  /**
+   * Whether anybody in this tenant could answer a `manager_of_requester`
+   * approver. False makes that approver UNREACHABLE rather than "resolved at run
+   * time" — an approval routed to a manager in a tenant that has no manager is
+   * the same dead end as an empty group, and it is invisible until a change
+   * request has been sitting there for three weeks.
+   */
+  hasManagers: boolean;
+}
+
+/**
+ * Lowercased slugs of the PUBLISHED objects of one kind, in the shape the
+ * approval and escalation validators take their directory context in. Draft
+ * objects are deliberately absent: engines read published rows only, so a
+ * reference to a draft resolves in the editor and vanishes at run time.
+ */
+function publishedSlugs(ctx: LintContext, kind: ConfigKind): Set<string> {
+  const prefix = `${kind}:`;
+  const out = new Set<string>();
+  for (const [key, value] of ctx.known) {
+    if (value.status !== 'published') continue;
+    if (key.startsWith(prefix)) out.add(key.slice(prefix.length));
+  }
+  return out;
 }
 
 const keyOf = (kind: ConfigKind, slug: string): string => `${kind}:${slug.toLowerCase()}`;
 
 /**
- * Load everything the linter needs to resolve a slug, in three queries.
+ * Load everything the linter needs to resolve a slug, in four queries.
  * `candidates` are objects that are about to exist (an import bundle, or the
  * draft being published) — they resolve each other's references, otherwise
  * importing a queue and its SLA in the same bundle could never succeed.
@@ -460,10 +487,21 @@ export async function buildLintContext(
   tenantId: number,
   candidates: readonly LintTarget[] = [],
 ): Promise<LintContext> {
-  const [objects, groupRows, userRows] = await Promise.all([
+  const [objects, groupRows, userRows, managerRows] = await Promise.all([
     scoped('config_objects', tenantId).select('kind', 'slug', 'status', 'body', 'body_format_version'),
     scoped('assignment_groups', tenantId).select('slug', 'member_user_ids'),
     db('users').select('username').where('is_active', true),
+    // `users` / `user_tenants` are global tables — db() is correct for them, and
+    // the tenant predicate is on `user_tenants` (the same query
+    // `approval.service.buildApprovalLintContext()` runs, so the linter and the
+    // engine agree on what "there is somebody to ask" means).
+    db('user_tenants')
+      .join('users', 'users.id', 'user_tenants.user_id')
+      .where('user_tenants.tenant_id', tenantId)
+      .whereIn('user_tenants.role', ['manager', 'admin'])
+      .where('users.is_active', true)
+      .limit(1)
+      .select('users.id'),
   ]);
 
   const known = new Map<string, KnownObject>();
@@ -496,7 +534,13 @@ export async function buildLintContext(
     (userRows as Array<Record<string, unknown>>).map((row) => String(row.username).toLowerCase()),
   );
 
-  return { tenantId, known, usernames, groups };
+  return {
+    tenantId,
+    known,
+    usernames,
+    groups,
+    hasManagers: (managerRows as unknown[]).length > 0,
+  };
 }
 
 function parseJson(value: unknown): unknown {
@@ -629,6 +673,9 @@ function lintTargetBody(target: LintTarget, ctx: LintContext): ConfigLintFinding
       break;
     case 'approval':
       findings.push(...lintApproval(target, body, ctx));
+      break;
+    case 'escalation':
+      findings.push(...lintEscalation(target, body, ctx));
       break;
     case 'sla':
       findings.push(...lintSla(target, body, ctx));
@@ -847,134 +894,85 @@ function lintStateMachine(
   return out;
 }
 
-// ── approval ─────────────────────────────────────────────────────────────────
+// ── approval and escalation ──────────────────────────────────────────────────
+
+/**
+ * The approval and escalation engines own their own validators, and this module
+ * CALLS them rather than keeping a second opinion.
+ *
+ * That is not tidiness. The inline `lintApproval()` this replaces flagged an
+ * UNRECOGNISED `onTimeout` but never a MISSING one — and the missing case is the
+ * half that produces the three-week-old change request nobody can find: the
+ * approval was asked, nobody answered, and nothing said what to do about it.
+ * `validateApprovalDefinition()` treats "this stage does not say what happens
+ * when its timeout expires" as the error it is, and there is now exactly one
+ * implementation of that judgement, shared by the linter, the routes' save path
+ * and `startApproval()` at run time.
+ *
+ * Both validators already emit `ConfigLintCode` values, so a finding maps across
+ * with a spread and no translation table.
+ *
+ * They are reached by a `require` at CALL time. The header states the invariant:
+ * the store imports the linter, never the other way round — and both engines
+ * import `configObject.service`, which imports this file. A static import would
+ * close that ring at module-initialisation time; a call-time `require` does not,
+ * because by then every module in it is already initialised.
+ *
+ * Deliberately NOT behind a try/catch. These are siblings in the same build, so
+ * a failure to load one is a broken deployment — and quietly skipping the
+ * approval checks would wave through exactly the object this module exists to
+ * refuse.
+ */
+type ApprovalEngine = typeof import('./approval.service');
+type EscalationEngine = typeof import('./escalation.service');
+
+let approvalModule: ApprovalEngine | undefined;
+let escalationModule: EscalationEngine | undefined;
+
+function approvalEngine(): ApprovalEngine {
+  const loaded = approvalModule ?? (require('./approval.service') as ApprovalEngine);
+  approvalModule = loaded;
+  return loaded;
+}
+
+function escalationEngine(): EscalationEngine {
+  const loaded = escalationModule ?? (require('./escalation.service') as EscalationEngine);
+  escalationModule = loaded;
+  return loaded;
+}
 
 function lintApproval(
   target: LintTarget,
   body: Record<string, unknown>,
   ctx: LintContext,
 ): ConfigLintFinding[] {
-  const out: ConfigLintFinding[] = [];
   const { kind, slug } = target;
-  const push = (
-    severity: ConfigLintFinding['severity'],
-    path: string,
-    code: ConfigLintCode,
-    message: string,
-  ): void => { out.push({ severity, kind, slug, path, code, message }); };
+  return approvalEngine()
+    .validateApprovalDefinition(body, {
+      usernames: ctx.usernames,
+      groups: ctx.groups,
+      fieldSlugs: publishedSlugs(ctx, 'field'),
+      calendars: publishedSlugs(ctx, 'calendar'),
+      escalations: publishedSlugs(ctx, 'escalation'),
+      hasManagers: ctx.hasManagers,
+    })
+    .map((finding) => ({ ...finding, kind, slug }));
+}
 
-  const steps = Array.isArray(body.steps) ? body.steps.filter(isPlainObject) : [];
-  if (steps.length === 0) {
-    push('error', 'steps', 'approval_no_approvers',
-      'An approval with no steps blocks the ticket and asks nobody. Every ticket that starts it stops there.');
-    return out;
-  }
-
-  steps.forEach((step, index) => {
-    const approvers = Array.isArray(step.approvers) ? step.approvers.filter(isPlainObject) : [];
-
-    // "Reachable" means a human (or a rule that resolves to one) could
-    // actually be asked. An empty group is NOT reachable — that is the classic
-    // way an approval silently becomes a dead end.
-    let reachable = 0;
-    approvers.forEach((approver, approverIndex) => {
-      const path = `steps[${index}].approvers[${approverIndex}]`;
-      const approverKind = typeof approver.kind === 'string' ? approver.kind : '';
-      const ref = typeof approver.ref === 'string' ? approver.ref.trim() : '';
-
-      switch (approverKind) {
-        case 'user': {
-          if (!ref) {
-            push('error', path, 'approval_no_approvers', 'An approver of kind "user" with no username.');
-            return;
-          }
-          if (!ctx.usernames.has(ref.toLowerCase())) {
-            push('error', path, 'dangling_reference',
-              `No active user is named "${ref}". Approvers are referenced by username, never by id (HARD RULE 3).`);
-            return;
-          }
-          reachable += 1;
-          return;
-        }
-        case 'group': {
-          if (!ref) {
-            push('error', path, 'approval_no_approvers', 'An approver of kind "group" with no group slug.');
-            return;
-          }
-          const members = ctx.groups.get(ref.toLowerCase());
-          if (members === undefined) {
-            push('error', path, 'dangling_reference', `No assignment group has the slug "${ref}".`);
-            return;
-          }
-          if (members === 0) {
-            push('error', path, 'approval_no_approvers',
-              `The assignment group "${ref}" has no members, so this step resolves to zero approvers and the ticket parks here indefinitely.`);
-            return;
-          }
-          reachable += 1;
-          return;
-        }
-        case 'manager_of_requester': {
-          // Resolvable only at run time; assume reachable and let the approval
-          // engine's own decision_log row explain a miss.
-          reachable += 1;
-          return;
-        }
-        case 'field': {
-          if (!ref) {
-            push('error', path, 'approval_no_approvers', 'An approver of kind "field" with no field slug.');
-            return;
-          }
-          const found = ctx.known.get(keyOf('field', ref));
-          if (!found) {
-            push('error', path, 'dangling_reference',
-              `No field object declares "${ref}", so this approver can never resolve.`);
-            return;
-          }
-          reachable += 1;
-          return;
-        }
-        default:
-          push('error', path, 'approval_no_approvers',
-            `Unknown approver kind "${approverKind}". Expected user, group, manager_of_requester or field.`);
-      }
-    });
-
-    if (reachable === 0) {
-      push('error', `steps[${index}].approvers`, 'approval_no_approvers',
-        `Step ${index + 1} resolves to zero reachable approvers. The ticket would be blocked waiting for a decision that nobody has been asked to make.`);
-    }
-
-    const mode = typeof step.mode === 'string' ? step.mode : 'parallel';
-    if (mode === 'quorum') {
-      const quorum = Number(step.quorum);
-      if (!Number.isInteger(quorum) || quorum < 1) {
-        push('error', `steps[${index}].quorum`, 'approval_no_approvers',
-          'A quorum step needs a quorum of at least 1.');
-      } else if (reachable > 0 && quorum > reachable) {
-        push('error', `steps[${index}].quorum`, 'approval_no_approvers',
-          `Step ${index + 1} needs ${quorum} approvals but only ${reachable} approver${reachable === 1 ? '' : 's'} can be reached. The quorum can never be met.`);
-      }
-    }
-
-    // A step with no timeout is the other half of the same failure: nobody is
-    // asked twice, and nothing escalates. `onTimeout: 'wait'` is an explicit
-    // "block forever" and is still required to say how long it waits before
-    // reminding, so the absence of a duration is always a defect.
-    const dueMinutes = Number(step.dueMinutes ?? step.due_minutes ?? step.timeoutMinutes);
-    if (!Number.isFinite(dueMinutes) || dueMinutes <= 0) {
-      push('error', `steps[${index}].dueMinutes`, 'approval_no_timeout',
-        `Step ${index + 1} has no timeout. An approval nobody answers then waits forever with no reminder and no escalation — the single most common way a change request disappears.`);
-    }
-
-    const onTimeout = typeof step.onTimeout === 'string' ? step.onTimeout : '';
-    if (onTimeout && !['approve', 'reject', 'escalate', 'wait'].includes(onTimeout)) {
-      push('error', `steps[${index}].onTimeout`, 'approval_no_timeout',
-        `Unknown onTimeout "${onTimeout}". Expected approve, reject, escalate or wait.`);
-    }
-  });
-
-  return out;
+function lintEscalation(
+  target: LintTarget,
+  body: Record<string, unknown>,
+  ctx: LintContext,
+): ConfigLintFinding[] {
+  const { kind, slug } = target;
+  return escalationEngine()
+    .validateEscalationDefinition(body, {
+      usernames: ctx.usernames,
+      groups: ctx.groups,
+      calendars: publishedSlugs(ctx, 'calendar'),
+      templates: publishedSlugs(ctx, 'notification_template'),
+    })
+    .map((finding) => ({ ...finding, kind, slug }));
 }
 
 // ── sla ──────────────────────────────────────────────────────────────────────

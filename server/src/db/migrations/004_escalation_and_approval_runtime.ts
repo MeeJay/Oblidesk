@@ -1,7 +1,7 @@
 import type { Knex } from 'knex';
 
 /**
- * 003_escalation_and_approval_runtime.ts
+ * 004_escalation_and_approval_runtime.ts
  *
  * Additive only. 001 and 002 are never edited (they are the shipped baseline
  * this instance already ran); everything here is new tables plus new NULLABLE

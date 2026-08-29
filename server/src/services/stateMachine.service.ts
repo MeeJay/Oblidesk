@@ -882,7 +882,9 @@ export type BlockedReasonCode =
   | 'missing_capability'
   | 'role_not_allowed'
   | 'actor_type_not_allowed'
-  | 'guard_failed';
+  | 'guard_failed'
+  /** An approval is still pending. Merged in by `applyApprovalBlocks()`. */
+  | 'approval_pending';
 
 /**
  * One reason a move is refused, structured so the client renders it through
@@ -1327,4 +1329,84 @@ export function availableTransitions(input: {
 /** Just the refusal reasons for one move — what the button tooltip renders. */
 export function blockedReasons(input: EvaluateTransitionInput): BlockedReason[] {
   return evaluateTransition(input).blocked;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The one refusal the synchronous evaluator cannot see
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The approval engine, resolved by a `require` at CALL time.
+ *
+ * This module is deliberately dependency-free (see the header: the engines boot
+ * without it) and `approval.service` reaches `configObject.service`, which
+ * reaches the config linter, which reaches back into the approval engine. A
+ * static import would close that ring at module-initialisation time; a call-time
+ * `require` closes nothing, and degrades to `null` — a desk with no approval
+ * engine simply has no approvals to be blocked by.
+ */
+type ApprovalEngine = typeof import('./approval.service');
+
+let approvalModule: ApprovalEngine | null | undefined;
+
+function approvalEngine(): ApprovalEngine | null {
+  if (approvalModule === undefined) {
+    try {
+      approvalModule = require('./approval.service') as ApprovalEngine;
+    } catch {
+      approvalModule = null;
+    }
+  }
+  return approvalModule;
+}
+
+/**
+ * Merge the approval engine's blocks into moves that have already been
+ * evaluated.
+ *
+ * `evaluateTransition()` is synchronous on purpose — the header bar evaluates
+ * every button for every row of a list, and a query per button would make the
+ * cheapest read on the desk the most expensive one. "Is an approval pending?"
+ * IS a query, so it is applied here instead, by the async caller, immediately
+ * after evaluation. The result is the same `blocked` array the client already
+ * renders through `t()`, carrying the approver's NAME in `params` — a button
+ * that looks available and then refuses is exactly what the inspector exists to
+ * prevent.
+ *
+ * Mutates and returns the decisions it was given: they were built one line
+ * earlier by the caller and copying them would only invite the two copies to
+ * disagree.
+ */
+export async function applyApprovalBlocks<T extends TransitionDecision>(
+  tenantId: number,
+  ticketId: number,
+  decisions: T[],
+  executor: Executor = db,
+): Promise<T[]> {
+  const engine = approvalEngine();
+  if (!engine || decisions.length === 0) return decisions;
+
+  // One probe for the whole ticket first. Almost every ticket has no pending
+  // approval at all, and asking per candidate status just to learn that would
+  // put six queries behind every header bar.
+  const pending = await engine.blockingApprovals(tenantId, ticketId, executor);
+  if (pending.length === 0) return decisions;
+
+  for (const decision of decisions) {
+    const blocks = await engine.transitionBlocks(
+      tenantId,
+      ticketId,
+      decision.toStatusSlug,
+      decision.toCategory,
+      executor,
+    );
+    if (blocks.length === 0) continue;
+    decision.blocked.push(...blocks);
+    // Re-derive `allowed` and the one-line French reason over the widened
+    // array. `finish()` only reads the target for a label fallback, and the
+    // decision already carries its own.
+    finish(decision, null);
+  }
+
+  return decisions;
 }

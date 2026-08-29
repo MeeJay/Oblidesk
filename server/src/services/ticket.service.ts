@@ -72,6 +72,7 @@ import {
   type DecisionRecorder,
 } from './priority.service';
 import {
+  applyApprovalBlocks,
   availableTransitions as evaluateAvailableTransitions,
   buildTransitionContext,
   categoryOf,
@@ -222,6 +223,45 @@ export interface SlaEngineHook {
     actorId: number | null;
     trx: Knex.Transaction;
   }): Promise<number[]>;
+  /**
+   * Priority moved mid-flight. The engine re-derives the deadline against the
+   * new budget; whether that keeps the elapsed time, restarts or recomputes
+   * from the start is the policy's business, not ours.
+   */
+  onPriorityChanged?(event: {
+    tenantId: number;
+    ticket: Ticket;
+    fromPriority: string;
+    toPriority: string;
+    actorId?: number | null;
+    trx: Knex.Transaction;
+  }): Promise<void> | void;
+  /**
+   * Record type moved. Record type is one of the policy resolution levels, so
+   * the policy must be RE-RESOLVED — leaving the old clocks running holds the
+   * ticket to a contract that no longer applies to it.
+   */
+  onRecordTypeChanged?(event: {
+    tenantId: number;
+    ticket: Ticket;
+    fromRecordType: string;
+    toRecordType: string;
+    actorId?: number | null;
+    trx: Knex.Transaction;
+  }): Promise<void> | void;
+  /**
+   * The first PUBLIC agent reply — what a `first_response` target stops on.
+   * Without this call the response-time SLA never stops, and every response
+   * target on the desk breaches in silence.
+   */
+  onFirstResponse?(event: {
+    tenantId: number;
+    ticket: Ticket;
+    at?: Date;
+    actorId?: number | null;
+    journalEntryId?: number | null;
+    trx: Knex.Transaction;
+  }): Promise<void> | void;
 }
 
 let slaEngine: SlaEngineHook = {};
@@ -258,6 +298,163 @@ async function runHook(
         });
       },
     ).catch(() => undefined);
+  }
+}
+
+// ── Escalation and approval: the same optionality, from the other side ───────
+//
+// The two engines above plug themselves in through `registerRulesEngine()` /
+// `registerSlaEngine()`. Escalation and approval cannot: they sit BELOW this
+// file in the dependency graph (both reach `configObject.service`, and
+// `ruleActions.ts` imports this module and them), so a static import here would
+// close a module-initialisation cycle and drag half the server into every
+// process that only wanted to read a ticket.
+//
+// So they are resolved by a `require` at CALL time — the same defensive shape
+// `middleware/validate.ts` uses — memoised, and degrading to `null` rather than
+// to a 500 when the module is not deployed. `typeof import(...)` is a TYPE
+// position, so it is erased and adds no runtime edge.
+
+type EscalationEngine = typeof import('./escalation.service');
+type ApprovalEngine = typeof import('./approval.service');
+
+let escalationModule: EscalationEngine | null | undefined;
+let approvalModule: ApprovalEngine | null | undefined;
+
+function escalationEngine(): EscalationEngine | null {
+  if (escalationModule === undefined) {
+    try {
+      escalationModule = require('./escalation.service') as EscalationEngine;
+    } catch {
+      escalationModule = null;
+    }
+  }
+  return escalationModule;
+}
+
+function approvalEngine(): ApprovalEngine | null {
+  if (approvalModule === undefined) {
+    try {
+      approvalModule = require('./approval.service') as ApprovalEngine;
+    } catch {
+      approvalModule = null;
+    }
+  }
+  return approvalModule;
+}
+
+type SlaEngineModule = typeof import('./sla.service');
+
+let slaModule: SlaEngineModule | null | undefined;
+
+function slaEngineModule(): SlaEngineModule | null {
+  if (slaModule === undefined) {
+    try {
+      slaModule = require('./sla.service') as SlaEngineModule;
+    } catch {
+      slaModule = null;
+    }
+  }
+  return slaModule;
+}
+
+/**
+ * The three hooks that were added to `SlaEngineHook` AFTER `sla.service` wrote
+ * its self-registration.
+ *
+ * `sla.service` registers itself with a fixed object literal naming four hooks.
+ * A hook added to the interface later is therefore absent from what was
+ * registered — and an absent hook here is not a degraded clock, it is a
+ * response-time SLA that never stops, silently, on every ticket on the desk.
+ * That is precisely the class of failure the interface exists to prevent, so it
+ * must not depend on somebody remembering to widen a literal in another file.
+ *
+ * A REGISTERED hook always wins (that is what lets a test swap in a fake); only
+ * a genuinely absent one falls through to the engine module's own export of the
+ * same name, resolved by the same call-time `require` as the two engines above.
+ * `sla.service` imports THIS file in order to register, so the import has to
+ * stay call-time; by the time a ticket moves, both modules are initialised.
+ * With no SLA engine deployed at all this still resolves to `undefined` and
+ * still degrades rather than crashing.
+ *
+ * Retiring this is one line in `sla.service`: pass `slaService` (which already
+ * carries all seven) to `registerSlaEngine()` instead of the literal. The `Pick`
+ * in the return type is deliberate — it keeps the bridge to exactly the three
+ * hooks that need it, and leaves the original four behaving exactly as before.
+ */
+function newerSlaHooks(): Pick<
+  SlaEngineHook,
+  'onPriorityChanged' | 'onRecordTypeChanged' | 'onFirstResponse'
+> {
+  const engine = slaEngineModule();
+  if (!engine) return slaEngine;
+  return {
+    onPriorityChanged: slaEngine.onPriorityChanged ?? engine.onPriorityChanged,
+    onRecordTypeChanged: slaEngine.onRecordTypeChanged ?? engine.onRecordTypeChanged,
+    onFirstResponse: slaEngine.onFirstResponse ?? engine.onFirstResponse,
+  };
+}
+
+/**
+ * The field moves an SLA policy is resolved against, fired from the one place
+ * both `update()` and `transition()` can see them: the row BEFORE against the
+ * row AFTER.
+ *
+ * Comparing rows rather than inspecting the request is deliberate. Priority does
+ * not only move through `PATCHABLE.prioritySlug` — the matrix recomputes it from
+ * an impact/urgency edit, and a transition effect can set it outright — so a
+ * check keyed off "did the caller mention prioritySlug?" misses two of the three
+ * ways it actually changes, and a deadline that silently never moves is exactly
+ * the failure this wiring closes.
+ *
+ * Both hooks are idempotent and both no-op when the value did not move, so the
+ * cost on the overwhelming majority of edits is two string comparisons.
+ */
+async function runFieldChangeHooks(
+  tenantId: number,
+  before: Ticket,
+  after: Ticket,
+  actorId: number | null,
+  tx: Knex.Transaction,
+): Promise<void> {
+  if (after.prioritySlug !== before.prioritySlug) {
+    await runHook('sla.onPriorityChanged', tenantId, after.id, () =>
+      newerSlaHooks().onPriorityChanged?.({
+        tenantId,
+        ticket: after,
+        fromPriority: before.prioritySlug,
+        toPriority: after.prioritySlug,
+        actorId,
+        trx: tx,
+      }),
+    );
+    // A P3 becoming a P1 is one of the three ticket-level escalation triggers:
+    // the ladder that pages the on-call for a P1 must arm on the UPGRADE, not
+    // only on tickets that were born critical.
+    await runHook('escalation.onPriorityChanged', tenantId, after.id, async () => {
+      await escalationEngine()?.onTicketEvent({
+        tenantId,
+        ticketId: after.id,
+        trigger: 'priority',
+        occurrenceRef: after.prioritySlug,
+        context: { fromPriority: before.prioritySlug, toPriority: after.prioritySlug },
+        actorId,
+        trx: tx,
+      });
+    });
+  }
+
+  if (after.recordType !== before.recordType) {
+    await runHook('sla.onRecordTypeChanged', tenantId, after.id, () =>
+      newerSlaHooks().onRecordTypeChanged?.({
+        tenantId,
+        ticket: after,
+        fromRecordType: before.recordType,
+        toRecordType: after.recordType,
+        actorId,
+        trx: tx,
+      }),
+    );
   }
 }
 
@@ -1721,6 +1918,11 @@ export async function update(
       },
     );
 
+    // Before the rules engine, for the same reason `create()` runs SLA first:
+    // a rule that reacts to the new priority should see the clock that the
+    // priority change already moved, not race it.
+    await runFieldChangeHooks(tenantId, beforeTicket, ticket, actor.userId ?? null, tx);
+
     await runHook('rules.onTicketUpdated', tenantId, ticketId, () =>
       rulesEngine.onTicketUpdated?.({
         tenantId,
@@ -1839,18 +2041,25 @@ export async function getAvailableTransitions(
   ]);
   const extras = await loadTransitionExtras(tenantId, ticket, executor);
 
+  const transitions = evaluateAvailableTransitions({
+    machine,
+    ticket,
+    actor,
+    extras,
+    requiredWhenFields,
+    now: new Date().toISOString(),
+  });
+
   return {
     machineSlug: machine.slug,
     currentStatusSlug: ticket.statusSlug,
     currentCategory: ticket.statusCategory,
-    transitions: evaluateAvailableTransitions({
-      machine,
-      ticket,
-      actor,
-      extras,
-      requiredWhenFields,
-      now: new Date().toISOString(),
-    }),
+    // A pending approval is the one refusal `evaluateTransition()` cannot see:
+    // it is a query, and the evaluator is synchronous so the header bar can
+    // render a list of tickets without a query per button. It is merged in here
+    // instead, so the inspector says "bloqué : l'approbation « CAB » attend
+    // Marie Dupont" in the PREVIEW rather than in a 409 after the click.
+    transitions: await applyApprovalBlocks(tenantId, ticketId, transitions, executor),
   };
 }
 
@@ -2016,6 +2225,26 @@ export async function transition(
       throw new TransitionRefusedError(decision);
     }
 
+    // ── A pending approval BLOCKS the move ────────────────────────────────
+    //
+    // `getAvailableTransitions()` already previews this, but a preview computed
+    // when the page rendered is a description, not a control: the approver can
+    // still be pending when the click lands. This is the enforcement, and it
+    // throws a 409 carrying the approver's NAME rather than a bare refusal.
+    //
+    // Skipped for `system: true` on exactly the same grounds as the guards
+    // above: a merge, a reopen and an alert recovery are facts arriving from
+    // elsewhere, not moves an approver was ever asked to gate.
+    if (request.system !== true) {
+      await approvalEngine()?.assertTransitionAllowed(
+        tenantId,
+        ticketId,
+        request.toStatusSlug,
+        decision.toCategory,
+        tx,
+      );
+    }
+
     return withDecision(
       {
         tenantId,
@@ -2154,6 +2383,51 @@ export async function transition(
             trx: tx,
           }),
         );
+
+        // A transition's `effects` can set the priority outright, so the same
+        // comparison `update()` runs belongs here too — the clock must move
+        // whichever door changed the field.
+        await runFieldChangeHooks(tenantId, beforeTicket, ticket, actor.userId ?? null, tx);
+
+        // ── The two lifecycle engines ─────────────────────────────────────
+        //
+        // `resolved` is included alongside the terminal categories on purpose.
+        // It is deliberately NOT terminal (the requester can still push back and
+        // the auto-close job has not run), but it is equally not a state anybody
+        // should be paged about at 03:00, and an approval nobody can answer any
+        // more is a row that would block the reopen for no reason.
+        //
+        // Coming back out is symmetric: `reopen()` arms the ladders again through
+        // `onTicketEvent('reopened')`, and any transition back into the workable
+        // set runs `startRequiredApprovals()` in the else branch below.
+        const settled = isTerminal(ticket.statusCategory) || ticket.statusCategory === 'resolved';
+        const closeReason = `ticket_${ticket.statusCategory}`;
+
+        if (settled) {
+          await runHook('escalation.cancelForTicket', tenantId, ticketId, async () => {
+            await escalationEngine()?.cancelForTicket(tenantId, ticketId, closeReason, {
+              trx: tx,
+              actorId: actor.userId ?? null,
+            });
+          });
+          await runHook('approval.cancelForTicket', tenantId, ticketId, async () => {
+            await approvalEngine()?.cancelForTicket(tenantId, ticketId, closeReason, {
+              trx: tx,
+              actorId: actor.userId ?? null,
+            });
+          });
+        } else {
+          // `requiredWhen` gets its chance on every move, not only on creation:
+          // an approval that applies once the change reaches `scheduled` can
+          // only be started by the transition that puts it there.
+          await runHook('approval.startRequiredApprovals', tenantId, ticketId, async () => {
+            await approvalEngine()?.startRequiredApprovals(tenantId, ticketId, {
+              trx: tx,
+              actorId: actor.userId ?? null,
+            });
+          });
+        }
+
         await runHook('rules.onTicketTransitioned', tenantId, ticketId, () =>
           rulesEngine.onTicketTransitioned?.({
             tenantId,
@@ -2280,6 +2554,23 @@ export async function addJournalEntry(
       await scoped('tickets', tenantId, tx)
         .where('tickets.id', ticketId)
         .update({ first_response_at: tx.fn.now(), updated_at: tx.fn.now() });
+
+      // The response clock stops HERE, on the same code path as the column it is
+      // measured against, and off the flag computed just above rather than off a
+      // second opinion inside the engine — two implementations of "what counts
+      // as a first response" is two different response-time medians.
+      await runHook('sla.onFirstResponse', tenantId, ticketId, () =>
+        newerSlaHooks().onFirstResponse?.({
+          tenantId,
+          // `beforeTicket` is the row as it was a statement ago; the engine reads
+          // its id, source and createdAt, none of which this append touched.
+          ticket: beforeTicket,
+          at: new Date(entry.createdAt),
+          actorId: actor.userId ?? null,
+          journalEntryId: entry.id,
+          trx: tx,
+        }),
+      );
     } else {
       await scoped('tickets', tenantId, tx)
         .where('tickets.id', ticketId)
@@ -2982,6 +3273,27 @@ export async function reopen(
         });
       },
     );
+
+    // A reopen is one of the three ticket-level escalation triggers. Keyed off
+    // the reopen COUNT so the third reopen arms a third time — the ladder that
+    // says "tell the service owner when this comes back" is worthless if it only
+    // ever fires once.
+    await runHook('escalation.onTicketReopened', tenantId, ticketId, async () => {
+      await escalationEngine()?.onTicketEvent({
+        tenantId,
+        ticketId,
+        trigger: 'reopened',
+        occurrenceRef: ticket.reopenCount,
+        context: {
+          fromStatusSlug: before.statusSlug,
+          toStatusSlug: targetSlug,
+          reopenCount: ticket.reopenCount,
+          reason: input.reason ?? null,
+        },
+        actorId: actor.userId ?? null,
+        trx: tx,
+      });
+    });
 
     await runHook('rules.onTicketTransitioned', tenantId, ticketId, () =>
       rulesEngine.onTicketTransitioned?.({

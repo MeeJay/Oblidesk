@@ -133,7 +133,7 @@ declare global {
 // ═════════════════════════════════════════════════════════════════════════════
 
 /**
- * `portal_login_tokens` is created by migration `003_mail_portal_runtime.ts`
+ * `portal_login_tokens` is created by migration `005_mail_portal_runtime.ts`
  * and is TENANT SCOPED — it must be added to `TENANT_SCOPED_TABLES` in
  * `server/src/db/index.ts` so `scoped()` accepts it. That file is owned
  * elsewhere; until the entry lands, `scoped()` would throw "unknown table"

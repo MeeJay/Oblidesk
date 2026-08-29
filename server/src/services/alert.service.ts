@@ -1,5 +1,5 @@
 import type { Knex } from 'knex';
-import { db, scoped } from '../db';
+import { db, insertScoped, scoped } from '../db';
 import { logger } from '../utils/logger';
 
 /**
@@ -156,6 +156,43 @@ function parseInstant(value: unknown, fallback: Date): Date {
   return Number.isNaN(d.getTime()) ? fallback : d;
 }
 
+// ── CI liveness, as the envelope reports it ──────────────────────────────────
+//
+// The words the suite apps actually send for a monitor's new state. Anything
+// outside these two sets is UNKNOWN and must stay unknown: "disk 90% full" says
+// nothing about whether the box answers, and inferring "offline" from it would
+// pause every SLA clock on the device for a problem somebody can work on.
+
+const ONLINE_STATUS_WORDS = new Set(['up', 'online', 'ok', 'healthy', 'available', 'reachable', 'recovered']);
+const OFFLINE_STATUS_WORDS = new Set(['down', 'offline', 'unreachable', 'unavailable', 'dead', 'lost']);
+
+function readLiveness(body: AlertIngestBody): boolean | null {
+  const word = body.monitor?.newStatus?.trim().toLowerCase();
+  if (word) {
+    if (ONLINE_STATUS_WORDS.has(word)) return true;
+    if (OFFLINE_STATUS_WORDS.has(word)) return false;
+  }
+  // A recovery envelope with no recognisable status word is still the source app
+  // saying the thing it watches is answering again.
+  if (body.status === 'resolved') return true;
+  return null;
+}
+
+/** `ci_state_cache.state` is jsonb and may arrive as text depending on the driver. */
+function parseStateColumn(value: unknown): Record<string, unknown> {
+  let parsed: unknown = value;
+  if (typeof value === 'string') {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      parsed = null;
+    }
+  }
+  return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+    ? (parsed as Record<string, unknown>)
+    : {};
+}
+
 export const alertService = {
   /**
    * Validate a payload from a suite app. Throws AlertIngestError with a message
@@ -295,6 +332,90 @@ export const alertService = {
   },
 
   /**
+   * Refresh `ci_state_cache` from the envelope, then tell the SLA engine.
+   *
+   * This is the only place in the desk that hears a box go dark. `ci_state_cache`
+   * is described in migration 002 as "refreshed by the suite poller" — there is
+   * no poller, the alert stream IS the observation, and until this write existed
+   * the table stayed empty, which made `readCiState()` answer "I do not know"
+   * forever. The honest-SLA promise — device-offline and maintenance-window
+   * pausing — therefore never held: not wrongly, just never.
+   *
+   * Two deliberate choices:
+   *
+   *   `online` is carried FORWARD when the envelope says nothing recognisable
+   *     about liveness (see `readLiveness`). An alert about disk space is not
+   *     evidence that the machine's reachability changed, and overwriting a known
+   *     `true` with `null` would silently downgrade the clock's answer to
+   *     "unknown" and stop it pausing for a genuine outage later.
+   *
+   *   `observed_at` is the SOURCE's timestamp, while the engine is told `at =
+   *     now`. That pairing is what makes `CI_STATE_STALE_AFTER_MS` mean anything:
+   *     an envelope delivered an hour late correctly reads as stale, and the
+   *     engine writes its visible `pause_source_unavailable` note instead of
+   *     pausing on evidence it cannot stand behind.
+   */
+  async recordCiState(
+    trx: Knex.Transaction,
+    tenantId: number,
+    ciId: number,
+    body: AlertIngestBody,
+  ): Promise<void> {
+    const previous = (await scoped('ci_state_cache', tenantId, trx)
+      .where('ci_state_cache.ci_id', ciId)
+      .first('ci_state_cache.online', 'ci_state_cache.state')) as
+      | { online: boolean | null; state: unknown }
+      | undefined;
+
+    const liveness = readLiveness(body);
+    const observedAt = parseInstant(
+      body.status === 'resolved' ? body.resolvedAt ?? body.occurredAt : body.occurredAt,
+      new Date(),
+    );
+
+    const state: Record<string, unknown> = {
+      ...parseStateColumn(previous?.state),
+      // The shape `sla.service.readCiState()` reads. Written on EVERY envelope,
+      // including the ones that leave it false, so the end of a maintenance
+      // window lifts the pause as reliably as the start applied it.
+      maintenance: {
+        inMaintenance: body.maintenance?.inMaintenance === true,
+        suppressedReason: body.maintenance?.suppressedReason ?? null,
+      },
+      lastSource: body.source,
+      lastMonitorStatus: body.monitor?.newStatus ?? null,
+      lastDedupeKey: body.stableKey,
+    };
+
+    await insertScoped(
+      'ci_state_cache',
+      tenantId,
+      {
+        ci_id: ciId,
+        online: liveness ?? previous?.online ?? null,
+        state: JSON.stringify(state),
+        observed_at: observedAt,
+      },
+      trx,
+    )
+      .onConflict('ci_id')
+      .merge(['online', 'state', 'observed_at']);
+
+    // Failures are swallowed on purpose: an SLA pause that could not be computed
+    // must not roll back the alert we just recorded, and the engine writes its
+    // own decision_log row on the path that did run.
+    try {
+      const { slaService } = await import('./sla.service');
+      await slaService.onCiStateChanged({ tenantId, ciId, at: new Date(), executor: trx });
+    } catch (error) {
+      logger.warn(
+        { err: (error as Error).message, tenantId, ciId, stableKey: body.stableKey },
+        'CI state recorded but the SLA engine could not be told — clocks may not have paused',
+      );
+    }
+  },
+
+  /**
    * Ingest one alert.
    *
    * The whole thing runs in ONE transaction, with a row lock on the open alert
@@ -331,6 +452,13 @@ export const alertService = {
           occurrence_count: Math.max(open.occurrence_count, body.occurrenceCount),
         });
 
+        // The device is answering again. Lift the device_offline pause BEFORE the
+        // recovery closes the ticket, so the clocks that are about to stop stop
+        // carrying the right elapsed time — and do it whether or not this binding
+        // auto-resolves, because the pause is a fact about the machine, not about
+        // what we chose to do with the ticket.
+        if (open.ci_id) await this.recordCiState(trx, tenantId, open.ci_id, body);
+
         if (!open.ticket_id || !binding.autoResolve) {
           return { alertId: open.id, stableKey: body.stableKey, action: 'resolved' as const, ticketId: open.ticket_id ?? null, ticketNumber: null };
         }
@@ -347,6 +475,17 @@ export const alertService = {
 
       // ── Firing ──────────────────────────────────────────────────────────────
       const ciId = await this.resolveCi(tenantId, body, trx);
+
+      // Recorded before the gate, not after it. Suppression decides whether a
+      // TICKET opens; it says nothing about whether the machine is down, and a
+      // flapping monitor below `minOccurrences` is exactly the case where the
+      // clocks on the tickets already open against this CI need to pause.
+      //
+      // A repeat envelope may omit the device block, and the open alert already
+      // knows which CI this dedupe key belongs to — falling back to it keeps the
+      // observation rather than dropping it on the second beat.
+      const stateCiId = ciId ?? ((open?.ci_id as number | null | undefined) ?? null);
+      if (stateCiId !== null) await this.recordCiState(trx, tenantId, stateCiId, body);
 
       if (open) {
         // GUARANTEE 2 (second half) — a repeat NEVER opens a second ticket. It

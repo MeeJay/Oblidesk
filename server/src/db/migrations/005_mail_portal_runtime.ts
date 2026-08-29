@@ -1,5 +1,5 @@
 /**
- * 003_mail_portal_runtime.ts — the two things Phase 6 needs that 001 and 002
+ * 005_mail_portal_runtime.ts — the two things Phase 6 needs that 001 and 002
  * did not provide.
  *
  * 001 and 002 are NEVER edited: a migration that has run on a real database is

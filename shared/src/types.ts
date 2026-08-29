@@ -1260,7 +1260,23 @@ export interface SlaResolvedVia {
   ruleSlug?: string;
 }
 
-export type SlaLedgerEvent = 'start' | 'pause' | 'resume' | 'target_switch' | 'breach' | 'met' | 'cancel';
+/**
+ * Every value the clock engine writes. `note` arrived with migration 003: it is
+ * an ANNOTATION and never a state change — the way a repair or a boot catch-up
+ * records why a clock looks the way it does, without telling that story as a
+ * fake `pause`/`resume` pair the replay would then believe. The DB's
+ * `sla_ledger_event_ck` allows exactly these eight, and a ledger row the client
+ * cannot type is a ledger row the client will not render.
+ */
+export type SlaLedgerEvent =
+  | 'start'
+  | 'pause'
+  | 'resume'
+  | 'target_switch'
+  | 'breach'
+  | 'met'
+  | 'cancel'
+  | 'note';
 
 /**
  * Append-only audit of every clock event. `(instance_id, event, at)` is unique,
