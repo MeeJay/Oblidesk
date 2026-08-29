@@ -259,7 +259,7 @@ export function EnrollmentPage() {
       setTotp(null);
       setTotpCode('');
     } catch (err) {
-      setError(serverError(err, t('enrollment.totpInvalid', 'Ce code est invalide — vérifiez l’horloge du téléphone.')));
+      setError(serverError(err, t('enrollment.totpInvalid', 'Ce code est invalide. Vérifiez l’horloge du téléphone.')));
     } finally {
       setBusy(false);
     }
@@ -622,7 +622,7 @@ export function EnrollmentPage() {
             onClick={() => navigate('/')}
             className="mx-auto block text-xs text-text-muted transition-colors hover:text-text-primary"
           >
-            {t('enrollment.later', 'Plus tard — aller au bureau')}
+            {t('enrollment.later', 'Plus tard (aller au bureau)')}
           </button>
         )}
       </div>

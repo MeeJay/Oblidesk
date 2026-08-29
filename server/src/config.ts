@@ -13,11 +13,15 @@
  * (dotenv never overwrites an already-set variable) and makes this module safe
  * to import from a script that forgot.
  *
- * PRODUCTION FAIL-FAST: `assertProductionConfig()` is called from
- * `createApp()` and refuses to start when a secret is still the shipped
- * placeholder. An open-source repo means the defaults are public; a session
- * signed with `dev-secret-change-me` is forgeable by anyone who can read
- * GitHub.
+ * PRODUCTION FAIL-FAST: `assertProductionConfig()` is called at the TOP of
+ * `main()`, before migrations and seeding, and refuses to start when a secret
+ * is still the shipped placeholder. An open-source repo means the defaults are
+ * public; a session signed with `dev-secret-change-me` is forgeable by anyone
+ * who can read GitHub.
+ *
+ * It only refuses what cannot be recovered from later. Configuration that is
+ * merely absent is reported by `degradedConfigWarnings()` instead, so the desk
+ * boots and says so at every start rather than crash-looping.
  */
 import './env';
 import path from 'path';
@@ -138,10 +142,11 @@ export const config = {
   // ── Secrets at rest ───────────────────────────────────────────────────────
   /**
    * AES-256-GCM key as 64 hex characters. Encrypts IMAP/SMTP passwords, OAuth
-   * refresh tokens and webhook signing keys. NULL in development, where
-   * `utils/crypto` falls back to a key derived from SESSION_SECRET — losing
-   * either makes the stored ciphertext unreadable, which is why production
-   * refuses to start without an explicit one.
+   * refresh tokens and webhook signing keys. May be NULL: the desk still runs,
+   * but `utils/crypto` refuses to encrypt in production without it, so saving a
+   * mail account is rejected with a message naming this variable. In
+   * development it falls back to a key derived from SESSION_SECRET, which is a
+   * convenience and not a security control.
    */
   encryptionKey,
 
@@ -231,24 +236,19 @@ export function assertProductionConfig(): void {
     );
   }
 
-  if (!config.encryptionKey) {
+  // A MALFORMED key is fatal: it is a typo, and booting past it would derive a
+  // different key than the operator believes, so everything encrypted now
+  // becomes unreadable the moment they fix the typo. An ABSENT key is not
+  // fatal — see degradedConfigWarnings().
+  if (config.encryptionKey && !/^[0-9a-fA-F]{64}$/.test(config.encryptionKey)) {
     problems.push(
-      'ENCRYPTION_KEY is required in production — it encrypts mailbox and SMTP ' +
-        'credentials at rest (generate one with: openssl rand -hex 32).',
+      'ENCRYPTION_KEY is set but is not 64 hexadecimal characters (32 bytes). ' +
+        'Fix it or unset it — generate one with: openssl rand -hex 32.',
     );
-  } else if (!/^[0-9a-fA-F]{64}$/.test(config.encryptionKey)) {
-    problems.push('ENCRYPTION_KEY must be exactly 64 hexadecimal characters (32 bytes).');
   }
 
   if (!process.env.DATABASE_URL) {
     problems.push('DATABASE_URL must be set explicitly in production.');
-  }
-
-  if (config.defaultAdminPassword === 'admin123') {
-    problems.push(
-      'DEFAULT_ADMIN_PASSWORD is still the shipped default — set it before the ' +
-        'first boot creates the bootstrap admin.',
-    );
   }
 
   if (problems.length > 0) {
@@ -258,4 +258,41 @@ export function assertProductionConfig(): void {
       )}`,
     );
   }
+}
+
+/**
+ * Configuration that is unsafe but not fatal.
+ *
+ * The distinction this function draws is the whole point of it. A desk that
+ * refuses to boot teaches an operator to work around the check; a desk that
+ * boots and says the same thing loudly at every start gets fixed. So the fatal
+ * list above holds only what CANNOT be recovered from later — a forgeable
+ * session secret, a typo'd encryption key — and everything that is merely
+ * *not yet configured* is reported here instead.
+ *
+ * Returns strings rather than logging them: `utils/logger.ts` reads this
+ * module, so importing the logger here would be a cycle. `index.ts` logs them
+ * once, before migrations.
+ */
+export function degradedConfigWarnings(): string[] {
+  const warnings: string[] = [];
+
+  if (!config.encryptionKey) {
+    warnings.push(
+      'ENCRYPTION_KEY is not set. Oblidesk runs, but mailbox and SMTP credentials ' +
+        'cannot be stored: saving a mail account will be refused until you set one ' +
+        '(openssl rand -hex 32). Nothing else is affected.',
+    );
+  }
+
+  if (config.isProd && config.defaultAdminPassword === 'admin123') {
+    warnings.push(
+      `The bootstrap admin "${config.defaultAdminUsername}" uses the shipped default ` +
+        'password. Change it at first login, or set DEFAULT_ADMIN_PASSWORD before the ' +
+        'first boot of a fresh database. This warning repeats at every start until ' +
+        'DEFAULT_ADMIN_PASSWORD is changed.',
+    );
+  }
+
+  return warnings;
 }

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Bell, CheckCheck, Trash2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { Toggle } from '@/components/common/Toggle';
 import { useLiveAlertsStore } from '@/store/liveAlertsStore';
 import { useTenantStore } from '@/store/tenantStore';
 import { cn } from '@/utils/cn';
@@ -80,40 +81,6 @@ function AlertRow({ alert, showTenantBadge, onOpen, onRemove }: AlertRowProps) {
         aria-label={t('notifications.dismiss', 'Ecarter')}
       >
         <X size={12} />
-      </button>
-    </div>
-  );
-}
-
-function Toggle({
-  enabled,
-  onChange,
-  label,
-}: {
-  enabled: boolean;
-  onChange: (value: boolean) => void;
-  label: string;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-2">
-      <span className="text-[11px] text-text-muted">{label}</span>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={enabled}
-        aria-label={label}
-        onClick={() => onChange(!enabled)}
-        className={cn(
-          'relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors',
-          enabled ? 'bg-accent' : 'bg-bg-active',
-        )}
-      >
-        <span
-          className={cn(
-            'inline-block h-3 w-3 rounded-full bg-white shadow transition-transform',
-            enabled ? 'translate-x-3.5' : 'translate-x-0.5',
-          )}
-        />
       </button>
     </div>
   );
@@ -300,8 +267,9 @@ export function NotificationCenter() {
 
             {tab === 'local' ? (
               <Toggle
-                enabled={localEnabled}
+                checked={localEnabled}
                 onChange={setLocalEnabled}
+                labelFirst
                 label={
                   localEnabled
                     ? t('notifications.popupsOn', 'Pop-ups actives')
@@ -311,8 +279,9 @@ export function NotificationCenter() {
             ) : (
               isMultiTenant && (
                 <Toggle
-                  enabled={multiTenantEnabled}
+                  checked={multiTenantEnabled}
                   onChange={setMultiTenantEnabled}
+                  labelFirst
                   label={
                     multiTenantEnabled
                       ? t('notifications.popupsAllOn', 'Pop-ups multi-tenant actives')

@@ -315,7 +315,7 @@ export function Widget({
             title={t('dashboard.tickets.empty', 'Aucun ticket dans cette vue.')}
             detail={t(
               'dashboard.tickets.emptyDetail',
-              'La vue a bien été évaluée — elle ne renvoie rien.',
+              'La vue a bien été évaluée : elle ne renvoie rien.',
             )}
           />
         ) : (

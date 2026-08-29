@@ -139,10 +139,10 @@ export function LoginPage() {
     if (!ssoErrorCode) return;
     setError(
       ssoErrorCode === 'sso_unreachable'
-        ? t('login.ssoUnreachable', "Obligate est injoignable — utilisez la connexion locale.")
+        ? t('login.ssoUnreachable', "Obligate est injoignable. Utilisez la connexion locale.")
         : ssoErrorCode === 'sso_misconfigured'
           ? t('login.ssoMisconfigured', 'La passerelle Obligate est mal configurée.')
-          : t('login.ssoFailed', "La connexion Obligate a échoué — essayez la connexion locale."),
+          : t('login.ssoFailed', "La connexion Obligate a échoué. Essayez la connexion locale."),
     );
   }, [ssoErrorCode, t]);
 
@@ -180,7 +180,7 @@ export function LoginPage() {
     } catch (err) {
       setError(
         ssoOnlyRejected(err)
-          ? t('login.ssoOnlyAccount', 'Ce compte se connecte via Obligate — utilisez le bouton ci-dessous.')
+          ? t('login.ssoOnlyAccount', 'Ce compte se connecte via Obligate. Utilisez le bouton ci-dessous.')
           : serverError(err, t('login.failed', 'Identifiant ou mot de passe incorrect.')),
       );
     } finally {
@@ -207,7 +207,7 @@ export function LoginPage() {
         // back to the password form is the only honest recovery.
         if (/waiting|pending|attente/i.test(message)) {
           setStep('credentials');
-          setError(t('login.sessionExpired', 'Session expirée — reconnectez-vous.'));
+          setError(t('login.sessionExpired', 'Session expirée. Reconnectez-vous.'));
         } else {
           setError(t('login.invalidCode', 'Ce code est invalide ou a expiré.'));
         }
@@ -375,7 +375,7 @@ export function LoginPage() {
                 <Mail size={12} />
                 {emailSent
                   ? t('login.twoFactor.emailSent', 'Un code vient de vous être envoyé par e-mail.')
-                  : t('login.twoFactor.emailNotSent', "Le code n'a pas pu être envoyé — demandez-en un nouveau.")}
+                  : t('login.twoFactor.emailNotSent', "Le code n'a pas pu être envoyé. Demandez-en un nouveau.")}
               </p>
             )}
 

@@ -57,6 +57,7 @@ import {
   type StatusCategory,
 } from '@oblidesk/shared';
 import { Button } from '@/components/common/Button';
+import { Toggle } from '@/components/common/Toggle';
 import ConditionBuilder, { useFieldCatalogue } from '@/components/automation/ConditionBuilder';
 import { cn } from '@/utils/cn';
 import type { FieldChoice } from '@/api/rules.api';
@@ -114,7 +115,7 @@ const PAUSE_SOURCE_LABELS: Readonly<Record<SourcePauseReason, { key: string; fr:
   device_offline: {
     key: 'sla.pauseSource.deviceOffline',
     fr: 'Équipement hors ligne',
-    help: 'L’horloge s’arrête tant que l’équipement est injoignable — une mesure trop ancienne n’est pas une preuve et ne met pas en pause.',
+    help: 'L’horloge s’arrête tant que l’équipement est injoignable. Une mesure trop ancienne n’est pas une preuve et ne met pas en pause.',
   },
   outside_hours: {
     key: 'sla.pauseSource.outsideHours',
@@ -337,7 +338,7 @@ function TargetCard({
               catalogue={catalogue}
               disabled={disabled}
               label={t('sla.stopWhen', 'Condition d’arrêt')}
-              emptyMeaning={t('sla.stopWhenEmpty', 'jamais — sans condition, l’horloge ne s’arrêtera pas toute seule')}
+              emptyMeaning={t('sla.stopWhenEmpty', 'jamais : sans condition, l’horloge ne s’arrêtera pas toute seule')}
             />
           )}
 
@@ -394,7 +395,7 @@ function TargetCard({
                 {calendars.map((entry) => (
                   <option key={entry.slug} value={entry.slug}>
                     {entry.name || entry.slug}
-                    {entry.is24x7 ? ' — 24×7' : ` — ${entry.weeklyHours} h/sem.`}
+                    {entry.is24x7 ? ' (24×7)' : ` (${entry.weeklyHours} h/sem.)`}
                   </option>
                 ))}
               </select>
@@ -681,7 +682,7 @@ export function SlaPolicyEditor({
           <p className="text-[11.5px] text-text-muted">
             {t(
               'sla.policyHeaderHelp',
-              'Priorité {{precedence}} — quand plusieurs contrats correspondent, la précédence la plus élevée gagne, et les perdants restent inscrits sur le ticket.',
+              'Priorité {{precedence}}. Quand plusieurs contrats correspondent, la précédence la plus élevée gagne, et les perdants restent inscrits sur le ticket.',
               { precedence: draft.precedence },
             )}
           </p>
@@ -703,7 +704,7 @@ export function SlaPolicyEditor({
             disabled={readOnly || blocking.length > 0 || !draft.slug.trim()}
             title={
               blocking.length > 0
-                ? t('sla.blockedBySelfCheck', 'Un problème bloquant empêche l’enregistrement — voir la cible concernée.')
+                ? t('sla.blockedBySelfCheck', 'Un problème bloquant empêche l’enregistrement : voir la cible concernée.')
                 : undefined
             }
             onClick={() => void onSave()}
@@ -756,7 +757,7 @@ export function SlaPolicyEditor({
             value={draft.name}
             onChange={(event) => patch({ name: event.target.value })}
             className={cn(CONTROL, 'w-full')}
-            placeholder={t('sla.policyNamePlaceholder', 'Contrat Or — clients sous contrat')}
+            placeholder={t('sla.policyNamePlaceholder', 'Contrat Or (clients sous contrat)')}
           />
         </label>
         <label className="block space-y-1">
@@ -799,7 +800,7 @@ export function SlaPolicyEditor({
             {calendars.map((entry) => (
               <option key={entry.slug} value={entry.slug}>
                 {entry.name || entry.slug}
-                {entry.is24x7 ? ' — 24×7' : ` — ${entry.weeklyHours} h/sem.`}
+                {entry.is24x7 ? ' (24×7)' : ` (${entry.weeklyHours} h/sem.)`}
               </option>
             ))}
           </select>
@@ -809,24 +810,17 @@ export function SlaPolicyEditor({
           <span className="text-[11.5px] font-medium text-text-secondary">
             {t('sla.enabled', 'Contrat actif')}
           </span>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={draft.enabled}
+          <Toggle
+            checked={draft.enabled}
+            onChange={(enabled) => patch({ enabled })}
             disabled={readOnly}
-            onClick={() => patch({ enabled: !draft.enabled })}
-            className={cn(
-              'relative block h-5 w-9 rounded-pill transition-colors disabled:opacity-40',
-              draft.enabled ? 'bg-accent' : 'bg-bg-tertiary',
+            disabledReason={t(
+              'sla.readOnlyNotice',
+              'Lecture seule : la publication d’un contrat ou d’un calendrier demande la capacité « administration de la configuration ».',
             )}
-          >
-            <span
-              className={cn(
-                'absolute top-0.5 h-4 w-4 rounded-full bg-bg-primary transition-transform',
-                draft.enabled ? 'translate-x-[18px]' : 'translate-x-0.5',
-              )}
-            />
-          </button>
+            aria-label={t('sla.enabled', 'Contrat actif')}
+            className="block"
+          />
         </div>
       </section>
 

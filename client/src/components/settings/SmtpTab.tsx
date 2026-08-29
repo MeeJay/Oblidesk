@@ -348,7 +348,7 @@ export function SmtpTab() {
             onChange={(event) => void setOtpServer(event.target.value ? Number(event.target.value) : null)}
             className="w-full max-w-sm rounded-md bg-bg-tertiary px-3 py-2 text-sm text-text-primary focus:outline-none focus:ring-2 focus:ring-accent"
           >
-            <option value="">{t('smtp.otpNone', 'Aucun — désactivé')}</option>
+            <option value="">{t('smtp.otpNone', 'Aucun (désactivé)')}</option>
             {servers.map((server) => (
               <option key={server.id} value={server.id}>
                 {server.name} ({server.host})

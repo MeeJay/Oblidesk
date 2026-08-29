@@ -26,6 +26,7 @@ import apiClient from '@/api/client';
 import { Button } from '@/components/common/Button';
 import { Input } from '@/components/common/Input';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { Toggle } from '@/components/common/Toggle';
 import { cn } from '@/utils/cn';
 
 interface SsoProbe {
@@ -153,29 +154,18 @@ export function ObligateSsoTab() {
             </p>
           </div>
 
-          <button
-            type="button"
-            role="switch"
-            aria-checked={enabled}
+          <Toggle
+            checked={enabled}
+            onChange={(next) => void patch({ enabled: next })}
             disabled={saving || (!enabled && !usable)}
-            title={
+            disabledReason={
               !enabled && !usable
                 ? t('sso.cannotEnable', "Renseignez l'URL et la clé d'API avant d'activer.")
-                : undefined
+                : t('common.saving', 'Enregistrement…')
             }
-            onClick={() => void patch({ enabled: !enabled })}
-            className={cn(
-              'relative mt-1 h-5 w-9 shrink-0 rounded-pill transition-colors disabled:opacity-40',
-              enabled ? 'bg-accent' : 'bg-bg-active',
-            )}
-          >
-            <span
-              className={cn(
-                'absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all',
-                enabled ? 'left-[1.125rem]' : 'left-0.5',
-              )}
-            />
-          </button>
+            aria-label={t('sso.enable', 'Activer la connexion via Obligate')}
+            className="mt-1 shrink-0"
+          />
         </div>
 
         <Input
@@ -198,7 +188,7 @@ export function ObligateSsoTab() {
               onChange={(e) => setApiKey(e.target.value)}
               placeholder={
                 config?.apiKeySet
-                  ? t('sso.apiKeyStored', 'Une clé est enregistrée — laisser vide pour la conserver')
+                  ? t('sso.apiKeyStored', 'Une clé est enregistrée : laisser vide pour la conserver')
                   : t('sso.apiKeyNone', 'Aucune clé enregistrée')
               }
               autoComplete="off"

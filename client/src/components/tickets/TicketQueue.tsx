@@ -397,7 +397,7 @@ export default function TicketQueue({
             <span className="text-text-muted">
               {t(
                 'tickets.selectAll.unknownTotal',
-                'Le total exact n’est pas connu au-delà de {{threshold}} lignes — affinez le filtre pour tout sélectionner.',
+                'Le total exact n’est pas connu au-delà de {{threshold}} lignes. Affinez le filtre pour tout sélectionner.',
                 { threshold: formatNumber(PAGINATION.exactCountThreshold) },
               )}
             </span>

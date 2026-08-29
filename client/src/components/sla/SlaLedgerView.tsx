@@ -119,7 +119,7 @@ function BandSentence({
   if (band.kind === 'worked') {
     return (
       <>
-        {head} {duration} — {t('sla.band.workedSentence', 'l’horloge tournait.')}
+        {head} {duration} : {t('sla.band.workedSentence', 'l’horloge tournait.')}
       </>
     );
   }
@@ -131,7 +131,7 @@ function BandSentence({
 
   return (
     <>
-      {head} {duration} — {reasons}.
+      {head} {duration} : {reasons}.
       {endedBy && (
         <>
           {' '}
@@ -267,7 +267,7 @@ export function SlaLedgerView({
       } else {
         toast.success(
           action === 'pause'
-            ? t('sla.pausedToast', 'Horloge mise en pause — l’action est inscrite au registre.')
+            ? t('sla.pausedToast', 'Horloge mise en pause. L’action est inscrite au registre.')
             : t('sla.resumedToast', 'Horloge relancée.'),
         );
       }
@@ -516,7 +516,7 @@ export function SlaLedgerView({
         <CalendarClock size={12} className="mt-0.5 shrink-0" />
         {t(
           'sla.ledgerFootnote',
-          'Ces bandes sont calculées à partir du registre et du calendrier, jamais à partir du compteur mis en cache. Si les deux divergeaient, c’est le registre qui est montré — c’est lui qui fait foi.',
+          'Ces bandes sont calculées à partir du registre et du calendrier, jamais à partir du compteur mis en cache. Si les deux divergeaient, c’est le registre qui est montré : c’est lui qui fait foi.',
         )}
       </p>
     </div>

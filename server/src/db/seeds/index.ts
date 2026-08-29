@@ -16,7 +16,11 @@ export {
   checksumOf,
 } from './02_baseline_config';
 
-export type { ConfigKind, ConditionNode, ConditionOp } from './02_baseline_config';
+// ConditionNode / Operator are NOT re-exported from here any more: they belong to
+// @oblidesk/shared, and the seed bundle now imports them from there. Re-exporting
+// a second copy is what let the two shapes drift apart in the first place.
+export type { ConfigKind } from './02_baseline_config';
+export type { ConditionNode, Operator } from '@oblidesk/shared';
 
 /**
  * seeds/index.ts — the programmatic entry point for the Oblidesk seed bundle.

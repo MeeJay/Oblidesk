@@ -42,6 +42,7 @@ import {
 import { Button } from '@/components/common/Button';
 import { Input } from '@/components/common/Input';
 import { Select, type SelectOption } from '@/components/common/Select';
+import { Toggle } from '@/components/common/Toggle';
 import { cn } from '@/utils/cn';
 import {
   METRIC_DIMENSION_LABELS,
@@ -512,9 +513,9 @@ export function WidgetConfigPanel({
           {(draft.widgetType === 'kpi' || draft.widgetType === 'stat') && (
             <Toggle
               label={t('dashboard.config.featured', 'Mettre en avant')}
-              hint={t(
+              description={t(
                 'dashboard.config.featuredHint',
-                'Carte accentuée, valeur plus grande — un seul élément par ligne d’indicateurs.',
+                'Carte accentuée, valeur plus grande. Un seul élément par ligne d’indicateurs.',
               )}
               checked={settings.featured}
               onChange={(checked) => patchConfig({ featured: checked })}
@@ -588,7 +589,7 @@ export function WidgetConfigPanel({
                 <p className="text-[11px] leading-relaxed text-sla-warn">
                   {t(
                     'dashboard.config.rollupWarning',
-                    'Mesure ponctuelle : son historique vient de l’agrégat nocturne. Sur une fenêtre bornée, elle est vide tant que l’agrégat n’a pas tourné — et c’est ce qu’affichera l’élément, plutôt qu’un zéro.',
+                    'Mesure ponctuelle : son historique vient de l’agrégat nocturne. Sur une fenêtre bornée, elle est vide tant que l’agrégat n’a pas tourné. C’est ce qu’affichera l’élément, plutôt qu’un zéro.',
                   )}
                 </p>
               )}
@@ -728,7 +729,7 @@ export function WidgetConfigPanel({
             title={t('dashboard.config.filters', 'Filtres')}
             hint={t(
               'dashboard.config.filtersHint',
-              'Seuls les axes déclarés par la mesure sont proposés — le serveur refuse les autres.',
+              'Seuls les axes déclarés par la mesure sont proposés : le serveur refuse les autres.',
             )}
           >
             <Select
@@ -832,7 +833,7 @@ export function WidgetConfigPanel({
             title={t('dashboard.config.interaction', 'Au clic')}
             hint={t(
               'dashboard.config.interactionHint',
-              'Sans vue de forage, un clic ouvre la liste des enregistrements calculés par le serveur — les mêmes prédicats que le nombre affiché.',
+              'Sans vue de forage, un clic ouvre la liste des enregistrements calculés par le serveur (les mêmes prédicats que le nombre affiché).',
             )}
           >
             <Select
@@ -953,49 +954,6 @@ function ScopeSelect({
       size="sm"
       onChange={(event) => onChange(event.target.value)}
     />
-  );
-}
-
-/**
- * A checkbox that reads as a switch. HARD RULE 11 — the track is a background
- * step, the knob is a raised tile; nothing is outlined.
- */
-function Toggle({
-  label,
-  hint,
-  checked,
-  onChange,
-}: {
-  label: string;
-  hint?: string;
-  checked: boolean;
-  onChange: (checked: boolean) => void;
-}) {
-  return (
-    <div className="flex items-start gap-2.5">
-      <button
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        onClick={() => onChange(!checked)}
-        className={cn(
-          'mt-0.5 flex h-4 w-7 shrink-0 items-center rounded-pill p-0.5 transition-colors',
-          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60',
-          checked ? 'bg-accent' : 'bg-bg-tertiary',
-        )}
-      >
-        <span
-          className={cn(
-            'h-3 w-3 rounded-full bg-bg-primary transition-transform',
-            checked && 'translate-x-3',
-          )}
-        />
-      </button>
-      <span className="min-w-0">
-        <span className="block text-[12px] font-medium text-text-secondary">{label}</span>
-        {hint && <span className="mt-0.5 block text-[11px] leading-relaxed text-text-muted">{hint}</span>}
-      </span>
-    </div>
   );
 }
 

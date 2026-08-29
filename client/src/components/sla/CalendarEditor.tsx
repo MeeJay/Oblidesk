@@ -42,6 +42,7 @@ import {
   type CalendarShift,
 } from '@oblidesk/shared';
 import { Button } from '@/components/common/Button';
+import { Toggle } from '@/components/common/Toggle';
 import { cn } from '@/utils/cn';
 
 const CONTROL =
@@ -319,7 +320,7 @@ export function CalendarEditor({
           </h2>
           <p className="text-[11.5px] text-text-muted">
             {calendar.is24x7
-              ? t('calendar.alwaysOpen', 'Ouvert en permanence — les plages et jours fériés sont ignorés.')
+              ? t('calendar.alwaysOpen', 'Ouvert en permanence : les plages et jours fériés sont ignorés.')
               : t('calendar.weeklyHours', '{{hours}} h ouvrées par semaine', {
                 hours: Math.round((weeklyMinutes / 60) * 10) / 10,
               })}
@@ -398,35 +399,20 @@ export function CalendarEditor({
 
       {/* ── 24×7 ─────────────────────────────────────────────────────────── */}
       <section className="rounded-lg bg-bg-secondary/60 p-3">
-        <label className="flex cursor-pointer items-start gap-2">
-          <button
-            type="button"
-            role="switch"
-            aria-checked={calendar.is24x7 === true}
-            disabled={readOnly}
-            onClick={() => patchCalendar({ is24x7: !calendar.is24x7 })}
-            className={cn(
-              'relative mt-0.5 h-5 w-9 shrink-0 rounded-pill transition-colors disabled:opacity-40',
-              calendar.is24x7 ? 'bg-accent' : 'bg-bg-tertiary',
-            )}
-          >
-            <span
-              className={cn(
-                'absolute top-0.5 h-4 w-4 rounded-full bg-bg-primary transition-transform',
-                calendar.is24x7 ? 'translate-x-[18px]' : 'translate-x-0.5',
-              )}
-            />
-          </button>
-          <span>
-            <span className="block text-[13px] text-text-primary">{t('calendar.is24x7', 'Ouvert 24×7')}</span>
-            <span className="block text-[11.5px] leading-snug text-text-muted">
-              {t(
-                'calendar.is24x7Help',
-                'Un calendrier 24×7 n’a pas de bornes d’ouverture : c’est le seul sur lequel une cible SLA peut légitimement se mettre en pause « hors horaires », en prenant ses bornes ailleurs.',
-              )}
-            </span>
-          </span>
-        </label>
+        <Toggle
+          checked={calendar.is24x7 === true}
+          onChange={(is24x7) => patchCalendar({ is24x7 })}
+          disabled={readOnly}
+          disabledReason={t(
+            'sla.readOnlyNotice',
+            'Lecture seule : la publication d’un contrat ou d’un calendrier demande la capacité « administration de la configuration ».',
+          )}
+          label={t('calendar.is24x7', 'Ouvert 24×7')}
+          description={t(
+            'calendar.is24x7Help',
+            'Un calendrier 24×7 n’a pas de bornes d’ouverture : c’est le seul sur lequel une cible SLA peut légitimement se mettre en pause « hors horaires », en prenant ses bornes ailleurs.',
+          )}
+        />
       </section>
 
       {/* ── the week you built ───────────────────────────────────────────── */}

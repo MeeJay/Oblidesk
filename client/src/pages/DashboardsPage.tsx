@@ -1231,7 +1231,7 @@ export function DashboardsPage(): JSX.Element {
         <p className="text-[13px] leading-relaxed text-text-secondary">
           {t(
             'dashboard.deleteWidgetDetail',
-            'Sa configuration — mesure, axe, période, filtres — est supprimée avec lui. Les autres éléments remontent pour combler le trou.',
+            'Sa configuration (mesure, axe, période, filtres) est supprimée avec lui. Les autres éléments remontent pour combler le trou.',
           )}
         </p>
       </Modal>

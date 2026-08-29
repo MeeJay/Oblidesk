@@ -99,7 +99,7 @@ const MODES: readonly ModeSpec[] = [
     fallback: 'Résolution',
     hintKey: 'composer.hint.resolution',
     hintFallback:
-      'Renseigne les notes de résolution puis déclenche la transition — les champs obligatoires sont vérifiés à ce moment-là.',
+      'Renseigne les notes de résolution puis déclenche la transition. Les champs obligatoires sont vérifiés à ce moment-là.',
     icon: CheckCircle2,
   },
 ];
@@ -749,7 +749,7 @@ export default function Composer({
 
               {macroChanges.length === 0 ? (
                 <p className="mt-1 text-[12px] text-text-muted">
-                  {t('composer.macroNoFields', 'Aucun champ — uniquement le message ci-dessous.')}
+                  {t('composer.macroNoFields', 'Aucun champ : uniquement le message ci-dessous.')}
                 </p>
               ) : (
                 <ul className="mt-1 flex flex-col gap-1">
@@ -825,10 +825,10 @@ export default function Composer({
             rows={6}
             placeholder={
               mode === 'internal'
-                ? t('composer.placeholderInternal', 'Note interne — markdown, ```code```, collez une capture…')
+                ? t('composer.placeholderInternal', 'Note interne : markdown, ```code```, collez une capture…')
                 : mode === 'resolution'
                   ? t('composer.placeholderResolution', 'Ce qui a été fait, et pourquoi ça règle le problème…')
-                  : t('composer.placeholderPublic', 'Réponse au demandeur — markdown, ```code```, collez une capture…')
+                  : t('composer.placeholderPublic', 'Réponse au demandeur : markdown, ```code```, collez une capture…')
             }
             className="w-full resize-y rounded-card bg-bg-tertiary p-2.5 font-sans text-[13px] leading-relaxed text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent"
           />

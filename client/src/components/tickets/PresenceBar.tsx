@@ -397,7 +397,7 @@ export default function PresenceBar({
           <AlertTriangle size={13} aria-hidden />
           {t(
             'presence.fieldCollision',
-            '{{name}} modifie le même champ que vous — votre enregistrement risque un conflit de version.',
+            '{{name}} modifie le même champ que vous. Votre enregistrement risque un conflit de version.',
             { name: nameOf(clashing[0]) },
           )}
         </span>

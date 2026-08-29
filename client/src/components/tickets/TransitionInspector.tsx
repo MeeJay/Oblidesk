@@ -115,7 +115,7 @@ export function describeBlockedTransition(
 ): string {
   const label = transitionLabel(option);
   if (option.allowed) return label;
-  return `${label} — ${t('transition.blockedPrefix', 'bloqué')} : ${describeBlocked(option.blocked, t)}`;
+  return `${label} (${t('transition.blockedPrefix', 'bloqué')}) : ${describeBlocked(option.blocked, t)}`;
 }
 
 const REASON_ICON: Record<string, typeof XCircle> = {
@@ -158,7 +158,7 @@ function TraceNode({ trace, depth }: { trace: ConditionTrace; depth: number }): 
       <div className="flex gap-2 font-mono text-[11px]" style={{ paddingLeft: depth * 14 }}>
         <span className="text-sla-breach">✗</span>
         <span className="text-text-muted">
-          {t('transition.trace.invalid', 'nœud invalide')} — {trace.detail}
+          {t('transition.trace.invalid', 'nœud invalide')} : {trace.detail}
         </span>
       </div>
     );
@@ -175,7 +175,7 @@ function TraceNode({ trace, depth }: { trace: ConditionTrace; depth: number }): 
             {' '}
             ({t('transition.trace.actual', 'valeur lue')} : {formatValue(trace.actual)})
           </span>
-          {trace.issue ? <span className="text-sla-warn"> — {trace.issue}</span> : null}
+          {trace.issue ? <span className="text-sla-warn"> · {trace.issue}</span> : null}
         </span>
       </div>
     );

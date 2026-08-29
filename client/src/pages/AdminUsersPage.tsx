@@ -252,7 +252,7 @@ export function AdminUsersPage() {
     try {
       await apiClient.put(`/users/${passwordFor.id}/password`, { password: newPassword });
       toast.success(
-        t('adminUsers.passwordReset', 'Mot de passe réinitialisé — toutes les sessions sont fermées.'),
+        t('adminUsers.passwordReset', 'Mot de passe réinitialisé. Toutes les sessions sont fermées.'),
       );
       setPasswordFor(null);
       setNewPassword('');

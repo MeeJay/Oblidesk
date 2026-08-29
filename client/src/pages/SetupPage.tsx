@@ -143,7 +143,7 @@ function describeError(error: unknown, fallback: string): string {
       .map((issue) => (isPlainObject(issue) ? String(issue.message ?? '') : String(issue)))
       .filter(Boolean)
       .slice(0, 3);
-    if (lines.length > 0) return `${apiError.message} — ${lines.join(' · ')}`;
+    if (lines.length > 0) return `${apiError.message} : ${lines.join(' · ')}`;
   }
   return apiError.message || fallback;
 }
@@ -496,7 +496,7 @@ interface DemoPhase {
 const DEMO_SUBJECTS: string[] = [
   'Impossible de se connecter au VPN depuis ce matin',
   'Imprimante du 2e étage hors ligne',
-  'Demande de création de compte — nouvelle arrivée',
+  'Demande de création de compte pour une nouvelle arrivée',
   'Outlook se ferme tout seul après la mise à jour',
   'Accès refusé au partage Comptabilité',
   'Le Wi-Fi invité ne distribue plus d’adresse',
@@ -510,7 +510,7 @@ const DEMO_SUBJECTS: string[] = [
   'Badge d’accès désactivé après le déménagement',
   'Erreur 500 sur le portail fournisseurs',
   'Micro inaudible en visioconférence',
-  'Départ de collaborateur — clôture des accès',
+  'Départ de collaborateur : clôture des accès',
   'Certificat expiré sur intranet.exemple.fr',
   'Le scanner ne renvoie plus les PDF par e-mail',
   'Demande de restauration d’un dossier supprimé',
@@ -1623,7 +1623,7 @@ export function SetupPage() {
                   className="font-mono"
                   hint={
                     queueMode === 'edit'
-                      ? t('setup.queueSlugLocked', 'Le slug est l’identité de la file — il ne se renomme pas.')
+                      ? t('setup.queueSlugLocked', 'Le slug est l’identité de la file : il ne se renomme pas.')
                       : t('setup.queueSlugHint', 'Minuscules, chiffres, tiret et souligné.')
                   }
                 />
@@ -1772,7 +1772,7 @@ export function SetupPage() {
                 <p className="text-[11px] leading-relaxed text-text-muted">
                   {t(
                     'setup.slaHolidays',
-                    'Les jours fériés français à date fixe sont déjà posés. Les fériés mobiles — lundi de Pâques, Ascension, lundi de Pentecôte — sont volontairement absents plutôt que faux : ajoutez-les dans SLA et équipes.',
+                    'Les jours fériés français à date fixe sont déjà posés. Les fériés mobiles (lundi de Pâques, Ascension, lundi de Pentecôte) sont volontairement absents plutôt que faux : ajoutez-les dans SLA et équipes.',
                   )}
                 </p>
               </div>
@@ -1833,7 +1833,7 @@ export function SetupPage() {
                                   }
                                   className="font-mono"
                                   wrapperClassName="w-24"
-                                  aria-label={`${target.label} — ${priority}`}
+                                  aria-label={`${target.label}, ${priority}`}
                                 />
                               </td>
                             ))}
@@ -1993,7 +1993,7 @@ export function SetupPage() {
                       <li>
                         {t(
                           'setup.demoItemTickets',
-                          'Des tickets répartis sur les files, avec impact et urgence variés — la priorité est calculée par la vraie matrice — et des dates de survenue étalées sur 30 jours.',
+                          'Des tickets répartis sur les files, avec impact et urgence variés (la priorité est calculée par la vraie matrice), et des dates de survenue étalées sur 30 jours.',
                         )}
                       </li>
                       <li className="text-text-muted">
@@ -2006,9 +2006,9 @@ export function SetupPage() {
                     <Select
                       label={t('setup.demoVolume', 'Nombre de tickets')}
                       options={[
-                        { value: '25', label: t('setup.demoVolumeSmall', '25 — juste de quoi regarder') },
-                        { value: '60', label: t('setup.demoVolumeMedium', '60 — une file crédible') },
-                        { value: '150', label: t('setup.demoVolumeLarge', '150 — pour éprouver la virtualisation') },
+                        { value: '25', label: t('setup.demoVolumeSmall', '25 (juste de quoi regarder)') },
+                        { value: '60', label: t('setup.demoVolumeMedium', '60 (une file crédible)') },
+                        { value: '150', label: t('setup.demoVolumeLarge', '150 (pour éprouver la virtualisation)') },
                       ]}
                       value={demoVolume}
                       onChange={(event) => setDemoVolume(event.target.value)}
@@ -2162,7 +2162,7 @@ export function SetupPage() {
           onClick={() => navigate('/')}
           className="mx-auto block text-[11px] text-text-muted transition-colors hover:text-text-primary"
         >
-          {t('setup.leave', 'Quitter — tout ce qui est enregistré le reste')}
+          {t('setup.leave', 'Quitter (tout ce qui est enregistré le reste)')}
         </button>
       </div>
     </div>

@@ -444,7 +444,7 @@ export default function BulkActionBar({ className }: BulkActionBarProps): JSX.El
         title={t('tickets.bulk.previewTitle', 'Ce qui va changer')}
         subtitle={t(
           'tickets.bulk.previewSubtitle',
-          '{{count}} tickets concernés — relisez avant d’appliquer.',
+          '{{count}} tickets concernés. Relisez avant d’appliquer.',
           { count: preview?.changes.length ?? 0 },
         )}
         footer={

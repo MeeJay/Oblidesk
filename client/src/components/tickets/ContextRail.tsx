@@ -424,7 +424,7 @@ export default function ContextRail({
             {t('rail.ci', 'Élément de configuration')}
           </h3>
           <p className="mt-2 text-[12px] text-text-muted">
-            {t('rail.noCi', 'Aucun CI lié — les sections des applications sœurs restent vides.')}
+            {t('rail.noCi', 'Aucun CI lié : les sections des applications sœurs restent vides.')}
           </p>
         </section>
       ) : (

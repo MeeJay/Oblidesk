@@ -163,10 +163,29 @@ export function signSessionCookie(sessionId: string): string {
  * still works — that derived key is not a security control, it is a
  * convenience, which is exactly why production will not accept it.
  */
+export class MissingEncryptionKeyError extends Error {
+  readonly status = 503;
+  constructor() {
+    super(
+      'ENCRYPTION_KEY is not configured, so credentials cannot be stored. ' +
+        'Set it (openssl rand -hex 32) and restart the server. Note that changing ' +
+        'it later makes anything already encrypted unreadable.',
+    );
+    this.name = 'MissingEncryptionKeyError';
+  }
+}
+
 function encryptionKey(): Buffer {
   if (config.encryptionKey && /^[0-9a-fA-F]{64}$/.test(config.encryptionKey)) {
     return Buffer.from(config.encryptionKey, 'hex');
   }
+  // In production, refuse rather than derive. Deriving from SESSION_SECRET
+  // would "work" — right up until the operator rotates the session secret,
+  // which is a routine, encouraged action, and every stored mailbox password
+  // becomes undecryptable at once with no warning and no way back. Failing the
+  // one request that wanted to store a secret is a far smaller problem than
+  // silently coupling credential storage to a key meant to be rotated.
+  if (config.isProd) throw new MissingEncryptionKeyError();
   return crypto.createHash('sha256').update(config.sessionSecret).digest();
 }
 

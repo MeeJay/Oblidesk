@@ -292,7 +292,7 @@ export function StatTile({
         <p className="mt-1.5 text-[11px] leading-snug text-text-muted">
           {t(
             'dashboard.noSingleTotal',
-            'Pas de total unique pour cette mesure — voir la répartition.',
+            'Pas de total unique pour cette mesure : voir la répartition.',
           )}
         </p>
       )}

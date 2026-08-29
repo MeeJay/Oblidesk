@@ -366,7 +366,7 @@ export function TicketsPage(): JSX.Element {
               title={t('tickets.badId', 'Cette adresse ne désigne pas un ticket')}
               description={t(
                 'tickets.badIdHint',
-                'Un ticket s’ouvre par son identifiant numérique — utilisez la recherche ou la palette de commandes pour le retrouver.',
+                'Un ticket s’ouvre par son identifiant numérique. Utilisez la recherche ou la palette de commandes pour le retrouver.',
               )}
             />
           </div>
@@ -418,7 +418,7 @@ export function TicketsPage(): JSX.Element {
                 {selectedId === null
                   ? t(
                       'rail.noTicket',
-                      'Le contexte — poste, contrat, alertes liées — apparaît dès qu’un ticket est ouvert.',
+                      'Le contexte (poste, contrat, alertes liées) apparaît dès qu’un ticket est ouvert.',
                     )
                   : t('common.loading', 'Chargement…')}
               </div>
@@ -497,7 +497,7 @@ function CategoryBoard({ onOpen }: { onOpen: (ticketId: number) => void }): JSX.
         <p className="shrink-0 px-1 text-[11px] text-text-muted">
           {t(
             'tickets.boardWindow',
-            'Ce tableau montre les {{count}} lignes chargées — faites défiler la file pour en charger davantage.',
+            'Ce tableau montre les {{count}} lignes chargées. Faites défiler la file pour en charger davantage.',
             { count: loaded },
           )}
         </p>

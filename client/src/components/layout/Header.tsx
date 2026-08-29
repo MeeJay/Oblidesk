@@ -159,7 +159,7 @@ export function Header() {
       ? t('header.socketConnected', 'Temps reel connecte')
       : socketStatus === 'reconnecting'
         ? t('header.socketReconnecting', 'Reconnexion en cours…')
-        : t('header.socketDisconnected', 'Temps reel deconnecte — cliquez pour recharger');
+        : t('header.socketDisconnected', 'Temps reel deconnecte. Cliquez pour recharger');
 
   return (
     <header

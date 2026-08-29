@@ -477,7 +477,7 @@ export default function WhyDrawer({
                     <p className="mt-1 text-[11px] text-text-muted">
                       {t('why.approvalState', 'État')} : {approval.state}
                       {approval.blockingSteps.length > 0
-                        ? ` — ${t('why.blockingSteps', '{{count}} étape(s) en attente', {
+                        ? ` · ${t('why.blockingSteps', '{{count}} étape(s) en attente', {
                             count: approval.blockingSteps.length,
                           })}`
                         : ''}

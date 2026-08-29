@@ -25,7 +25,7 @@ import { mkdirSync } from 'fs';
 import path from 'path';
 import { Client as PgClient } from 'pg';
 
-import { config } from './config';
+import { assertProductionConfig, config, degradedConfigWarnings } from './config';
 import { db } from './db';
 import { runSeeds } from './db/seeds';
 import { createApp } from './app';
@@ -214,6 +214,17 @@ class LeaderLock {
 // ═════════════════════════════════════════════════════════════════════════════
 
 async function main(): Promise<void> {
+  // ── 0. Configuration gate — BEFORE anything writes ───────────────────────
+  // This has to run first, and the reason is not style. It used to live in
+  // createApp(), which runs after migrations and seeding: on a fresh
+  // production install the bootstrap admin was created with the shipped
+  // password, and only THEN did the check refuse to boot — telling the
+  // operator to "set it before the first boot creates the bootstrap admin",
+  // which had already happened. A guard that fires after the thing it guards
+  // is not a guard; it is a crash loop that also lies.
+  assertProductionConfig();
+  for (const warning of degradedConfigWarnings()) logger.warn(warning);
+
   // ── 1. Migrations ────────────────────────────────────────────────────────
   logger.info('Running database migrations…');
   const [batch, applied] = (await db.migrate.latest()) as [number, string[]];

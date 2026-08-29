@@ -115,7 +115,7 @@ function EntryDetail({
           <ul className="space-y-0.5">
             {entry.issues.map((issue, index) => (
               <li key={index} className="text-[11.5px] text-sla-warn">
-                {issue.field ? `${fieldLabel(issue.field)} — ` : ''}
+                {issue.field ? `${fieldLabel(issue.field)} : ` : ''}
                 {t(ISSUE_REASONS[issue.reason]?.key ?? issue.reason, ISSUE_REASONS[issue.reason]?.fr ?? issue.reason)}
                 {issue.detail ? ` (${issue.detail})` : ''}
               </li>
@@ -153,7 +153,7 @@ function EntryDetail({
       <div className="flex items-start gap-1.5 text-[12px] text-sla-warn">
         <AlertTriangle size={12} className="mt-0.5 shrink-0" />
         <span>
-          <span className="font-mono">{entry.code}</span> — {entry.message}
+          <span className="font-mono">{entry.code}</span> : {entry.message}
         </span>
       </div>
     );
@@ -536,7 +536,7 @@ export function ExecutionLog({
       {total > PAGE_SIZE && (
         <div className="flex items-center justify-between text-[12px] text-text-muted">
           <span>
-            {t('rules.log.pageOf', 'Page {{page}} sur {{pages}} — {{total}} exécutions', {
+            {t('rules.log.pageOf', 'Page {{page}} sur {{pages}} ({{total}} exécutions)', {
               page,
               pages: pageCount,
               total,

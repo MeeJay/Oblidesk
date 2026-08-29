@@ -25,7 +25,7 @@ import session from 'express-session';
 import connectPgSimple from 'connect-pg-simple';
 import path from 'path';
 import { AUTH_TOKEN_HEADER, LIMITS } from '@oblidesk/shared';
-import { assertProductionConfig, config } from './config';
+import { config } from './config';
 import { errorHandler } from './middleware/errorHandler';
 import { apiLimiter } from './middleware/rateLimiter';
 import { logger } from './utils/logger';
@@ -79,9 +79,9 @@ export function authTokenBridge(req: Request, _res: Response, next: NextFunction
 }
 
 export function createApp(): CreatedApp {
-  // Refuse to boot a production install still wearing the demo's secrets.
-  assertProductionConfig();
-
+  // The production configuration gate runs in main(), BEFORE migrations and
+  // seeding — see the comment there. Calling it again here would be harmless
+  // but would suggest this is where it matters, and it is not.
   const app = express();
 
   // One reverse-proxy hop, so req.ip is the client's address from

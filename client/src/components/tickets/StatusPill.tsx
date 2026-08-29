@@ -97,7 +97,7 @@ export default function StatusPill({
   // row: "Statut « Attente client » — catégorie pending_requester (SLA en pause)".
   const title = [
     t('ticket.status.tooltip', 'Statut'),
-    ` « ${text} » — `,
+    ` « ${text} », `,
     t('ticket.status.categoryIs', 'catégorie'),
     ` ${cat}`,
     pausesSla(cat) ? ` · ${t('sla.paused', 'SLA en pause')}` : '',

@@ -22,6 +22,7 @@ import toast from 'react-hot-toast';
 import { Lock, RotateCcw, ShieldCheck } from 'lucide-react';
 import apiClient from '@/api/client';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { Toggle } from '@/components/common/Toggle';
 import { cn } from '@/utils/cn';
 
 type SettingValueType = 'number' | 'boolean' | 'string' | 'json';
@@ -225,6 +226,10 @@ export function GeneralTab({ isAdmin }: { isAdmin: boolean }) {
             )}
             checked={appConfig.force2fa}
             disabled={!appConfig.allow2fa}
+            disabledReason={t(
+              'settings.force2faBlocked',
+              "Autorisez d'abord la double authentification.",
+            )}
             onChange={(next) => void patchSecurity({ force2fa: next })}
           />
         </section>
@@ -307,9 +312,15 @@ function SettingRow({
 
       <div className="flex shrink-0 items-center gap-2">
         {definition.type === 'boolean' ? (
-          <Switch
+          <Toggle
             checked={entry.value === true}
             disabled={locked || saving}
+            disabledReason={
+              locked
+                ? t('settings.platformOnly', "Réservé à l'administrateur de la plateforme")
+                : t('common.saving', 'Enregistrement…')
+            }
+            aria-label={t(`setting.${definition.key}`, definition.label)}
             onChange={(next) => onWrite(next)}
           />
         ) : definition.choices && definition.choices.length > 0 ? (
@@ -360,60 +371,35 @@ function SettingRow({
   );
 }
 
-// ── Switch primitives ────────────────────────────────────────────────────────
+// ── One policy row ───────────────────────────────────────────────────────────
 
-function Switch({
-  checked,
-  disabled,
-  onChange,
-}: {
-  checked: boolean;
-  disabled?: boolean;
-  onChange: (next: boolean) => void;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      disabled={disabled}
-      onClick={() => onChange(!checked)}
-      className={cn(
-        'relative h-5 w-9 shrink-0 rounded-pill transition-colors disabled:opacity-40',
-        checked ? 'bg-accent' : 'bg-bg-active',
-      )}
-    >
-      <span
-        className={cn(
-          'absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all',
-          checked ? 'left-[1.125rem]' : 'left-0.5',
-        )}
-      />
-    </button>
-  );
-}
-
+/** The shared switch, on the row's own background step. */
 function SwitchRow({
   label,
   description,
   checked,
   disabled,
+  disabledReason,
   onChange,
 }: {
   label: string;
   description?: string;
   checked: boolean;
   disabled?: boolean;
+  disabledReason?: string;
   onChange: (next: boolean) => void;
 }) {
   return (
-    <div className="flex items-start justify-between gap-4 rounded-card bg-bg-tertiary px-3 py-2.5">
-      <div>
-        <p className="text-sm text-text-primary">{label}</p>
-        {description && <p className="mt-0.5 text-xs text-text-muted">{description}</p>}
-      </div>
-      <Switch checked={checked} disabled={disabled} onChange={onChange} />
-    </div>
+    <Toggle
+      checked={checked}
+      onChange={onChange}
+      disabled={disabled}
+      disabledReason={disabledReason}
+      labelFirst
+      label={label}
+      description={description}
+      className="w-full gap-4 rounded-card bg-bg-tertiary px-3 py-2.5"
+    />
   );
 }
 

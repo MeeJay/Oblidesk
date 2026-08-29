@@ -229,7 +229,7 @@ export default function InlineField({
             void commit(next);
           }}
         >
-          <option value="">{placeholder ?? t('field.none', '— aucun —')}</option>
+          <option value="">{placeholder ?? t('field.none', 'Aucun')}</option>
           {(options ?? []).map((option) => (
             <option key={option.value} value={option.value} disabled={option.disabled}>
               {option.hint ? `${option.label} · ${option.hint}` : option.label}

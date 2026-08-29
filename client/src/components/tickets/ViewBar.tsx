@@ -329,7 +329,7 @@ export default function ViewBar({
         tone: 'warn',
         title: t(
           'tickets.unsupportedFilters',
-          'Une partie du filtre n’a pas pu être appliquée — cette liste est plus étroite que prévu.',
+          'Une partie du filtre n’a pas pu être appliquée : cette liste est plus étroite que prévu.',
         ),
       });
     }
@@ -352,10 +352,23 @@ export default function ViewBar({
     <div className={clsx('flex flex-col gap-2 bg-bg-primary px-3 pb-2 pt-2.5', className)}>
       {/* ── The view strip ───────────────────────────────────────────────── */}
       <div className="flex items-center gap-2">
+        {/*
+          Wrap, do not scroll.
+
+          This row was `overflow-x-auto`, which hid views off the right edge —
+          the whole point of the strip is that you can see every view you have
+          without hunting for one. `overflow-x-auto` also clipped the row
+          VERTICALLY (CSS refuses `overflow-x: auto` with `overflow-y: visible`
+          and quietly promotes the other axis to `auto` too), so the active
+          chip's ring was sheared off along its top edge.
+
+          Wrapping costs a second line when there are many views and gives back
+          both: nothing is hidden, and nothing is clipped.
+        */}
         <div
           role="tablist"
           aria-label={t('views.title', 'Vues')}
-          className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto pb-0.5"
+          className="flex min-w-0 flex-1 flex-wrap items-center gap-1"
         >
           {views.length === 0 && (
             <span className="px-1 text-[12px] text-text-muted">
@@ -514,7 +527,7 @@ export default function ViewBar({
         <span className="inline-flex items-center gap-1.5 text-[11px] text-text-muted">
           <FilterIcon size={11} aria-hidden />
           {chips.length === 0
-            ? t('tickets.filter.none', 'Aucun filtre — tout ce que vous pouvez voir.')
+            ? t('tickets.filter.none', 'Aucun filtre : tout ce que vous pouvez voir.')
             : t('common.filters', 'Filtres')}
         </span>
 

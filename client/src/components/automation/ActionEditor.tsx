@@ -95,7 +95,7 @@ function ParamField({ spec, value, disabled, onChange }: ParamFieldProps): JSX.E
           onChange={(event) => onChange(event.target.value === '' ? undefined : event.target.value === 'true')}
           className={cn(CONTROL, 'appearance-none')}
         >
-          <option value="">{t('common.unset', '— non défini —')}</option>
+          <option value="">{t('common.unset', 'Non défini')}</option>
           <option value="true">{t('common.yes', 'Oui')}</option>
           <option value="false">{t('common.no', 'Non')}</option>
         </select>
@@ -110,7 +110,7 @@ function ParamField({ spec, value, disabled, onChange }: ParamFieldProps): JSX.E
           onChange={(event) => onChange(event.target.value || undefined)}
           className={cn(CONTROL, 'appearance-none')}
         >
-          <option value="">{t('common.unset', '— non défini —')}</option>
+          <option value="">{t('common.unset', 'Non défini')}</option>
           {(spec.enumValues ?? []).map((option) => (
             <option key={option} value={option}>
               {option}

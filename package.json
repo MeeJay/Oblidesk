@@ -17,7 +17,7 @@
     "docker:down": "docker compose down",
     "docker:logs": "docker compose logs -f",
     "docker:build": "docker compose -f docker-compose.build.yml up -d --build",
-    "verify": "npm run verify --workspace=shared"
+    "verify": "npm run verify --workspace=shared && npm run verify --workspace=server"
   },
   "workspaces": [
     "shared",

@@ -71,7 +71,7 @@ export default function PriorityBadge({
   const text = label?.trim() || prioritySlug.toUpperCase();
 
   const title = overrideReason
-    ? `${t('ticket.priority.overridden', 'Priorité forcée à la main')} — ${overrideReason}`
+    ? `${t('ticket.priority.overridden', 'Priorité forcée à la main')} : ${overrideReason}`
     : `${t('ticket.priority.label', 'Priorité')} ${text} (P${resolved})`;
 
   return (

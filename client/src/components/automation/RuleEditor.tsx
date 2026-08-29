@@ -42,6 +42,7 @@ import {
 } from 'lucide-react';
 import type { ConfigLintIssue } from '@oblidesk/shared';
 import { Button } from '@/components/common/Button';
+import { Toggle } from '@/components/common/Toggle';
 import { errorMessage, toApiError } from '@/api/client';
 import { cn } from '@/utils/cn';
 import {
@@ -97,47 +98,6 @@ function Section({
       </div>
       {children}
     </section>
-  );
-}
-
-function Toggle({
-  checked,
-  onChange,
-  label,
-  help,
-  disabled,
-}: {
-  checked: boolean;
-  onChange: (next: boolean) => void;
-  label: string;
-  help?: string;
-  disabled?: boolean;
-}): JSX.Element {
-  return (
-    <label className="flex cursor-pointer items-start gap-2">
-      <button
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        disabled={disabled}
-        onClick={() => onChange(!checked)}
-        className={cn(
-          'relative mt-0.5 h-5 w-9 shrink-0 rounded-pill transition-colors disabled:opacity-40',
-          checked ? 'bg-accent' : 'bg-bg-tertiary',
-        )}
-      >
-        <span
-          className={cn(
-            'absolute top-0.5 h-4 w-4 rounded-full bg-bg-primary transition-transform',
-            checked ? 'translate-x-[18px]' : 'translate-x-0.5',
-          )}
-        />
-      </button>
-      <span className="min-w-0">
-        <span className="block text-[13px] text-text-primary">{label}</span>
-        {help && <span className="block text-[11.5px] leading-snug text-text-muted">{help}</span>}
-      </span>
-    </label>
   );
 }
 
@@ -234,6 +194,7 @@ export function RuleEditor({
   }
 
   const canSimulate = draft.actions.length > 0 && draft.triggers.length > 0 && !readOnly;
+  const readOnlyReason = t('rules.sharedReadOnly', 'Règle partagée : à modifier depuis le locataire maître.');
 
   return (
     <div className="space-y-3">
@@ -383,7 +344,7 @@ export function RuleEditor({
               className={cn(CONTROL, 'h-auto resize-y py-2 leading-relaxed')}
               placeholder={t(
                 'rules.descriptionPlaceholder',
-                'À quoi elle sert, et pourquoi elle existe — la personne qui la lira dans six mois, c’est peut-être vous.',
+                'À quoi elle sert, et pourquoi elle existe. La personne qui la lira dans six mois, c’est peut-être vous.',
               )}
             />
           </label>
@@ -514,7 +475,7 @@ export function RuleEditor({
           onChange={(next) => patch({ when: next })}
           catalogue={catalogue}
           disabled={readOnly}
-          emptyMeaning={t('rules.whenAlways', 'toujours — la règle s’applique à chaque événement déclencheur')}
+          emptyMeaning={t('rules.whenAlways', 'toujours : la règle s’applique à chaque événement déclencheur')}
         />
       </Section>
 
@@ -538,16 +499,18 @@ export function RuleEditor({
           <Toggle
             checked={draft.enabled}
             disabled={readOnly}
+            disabledReason={readOnlyReason}
             onChange={(enabled) => patch({ enabled })}
             label={t('rules.enabled', 'Active')}
-            help={t('rules.enabledHelp', 'Une règle inactive reste dans la liste, à sa place, mais n’est pas évaluée.')}
+            description={t('rules.enabledHelp', 'Une règle inactive reste dans la liste, à sa place, mais n’est pas évaluée.')}
           />
           <Toggle
             checked={draft.dryRun}
             disabled={readOnly}
+            disabledReason={readOnlyReason}
             onChange={(dryRun) => patch({ dryRun })}
             label={t('rules.dryRunMode', 'Mode simulation')}
-            help={t(
+            description={t(
               'rules.dryRunModeHelp',
               'Évaluée et journalisée, mais n’effectue rien. La façon sûre d’introduire une règle sur un bureau en production.',
             )}
@@ -555,9 +518,10 @@ export function RuleEditor({
           <Toggle
             checked={draft.stopProcessing}
             disabled={readOnly}
+            disabledReason={readOnlyReason}
             onChange={(stopProcessing) => patch({ stopProcessing })}
             label={t('rules.stopProcessingLabel', 'Arrêter les règles suivantes')}
-            help={t(
+            description={t(
               'rules.stopProcessingLongHelp',
               'Si elle correspond, aucune règle plus bas dans la liste n’est évaluée pour cet événement.',
             )}
@@ -565,9 +529,10 @@ export function RuleEditor({
           <Toggle
             checked={draft.runOnce}
             disabled={readOnly}
+            disabledReason={readOnlyReason}
             onChange={(runOnce) => patch({ runOnce })}
             label={t('rules.runOnce', 'Une seule fois par ticket')}
-            help={t('rules.runOnceHelp', 'Ne se déclenchera jamais deux fois sur le même ticket.')}
+            description={t('rules.runOnceHelp', 'Ne se déclenchera jamais deux fois sur le même ticket.')}
           />
           <label className="block space-y-1">
             <span className="text-[11.5px] font-medium text-text-secondary">

@@ -693,7 +693,7 @@ export function SlaPage(): JSX.Element {
         title={t('sla.explainerTitle', 'D’où vient ce chiffre')}
         subtitle={t(
           'sla.explainerSubtitle',
-          'Bandes calculées à partir du registre et du calendrier — pas du compteur mis en cache.',
+          'Bandes calculées à partir du registre et du calendrier, pas du compteur mis en cache.',
         )}
         closeLabel={t('common.close', 'Fermer')}
       >

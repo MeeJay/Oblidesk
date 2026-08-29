@@ -366,7 +366,7 @@ function ValueEditor({ leaf, field, disabled, onChange }: ValueEditorProps): JSX
         className={cn(CONTROL, 'min-w-[160px] appearance-none pr-6')}
         aria-label={t('conditions.value', 'Valeur')}
       >
-        <option value="">{t('conditions.pickValue', '— choisir —')}</option>
+        <option value="">{t('conditions.pickValue', 'Choisir…')}</option>
         {field.choices.map((choice) => (
           <option key={choice.value} value={choice.value}>
             {choice.label}
@@ -385,7 +385,7 @@ function ValueEditor({ leaf, field, disabled, onChange }: ValueEditorProps): JSX
         className={cn(CONTROL, 'w-[120px] appearance-none pr-6')}
         aria-label={t('conditions.value', 'Valeur')}
       >
-        <option value="">{t('conditions.pickValue', '— choisir —')}</option>
+        <option value="">{t('conditions.pickValue', 'Choisir…')}</option>
         <option value="true">{t('common.yes', 'Oui')}</option>
         <option value="false">{t('common.no', 'Non')}</option>
       </select>
@@ -501,7 +501,7 @@ function LeafRow({ leaf, catalogue, disabled, onChange, onRemove }: LeafRowProps
       >
         {unknownField && (
           <option value={leaf.field}>
-            {leaf.field} — {t('conditions.unknownField', 'champ inconnu')}
+            {leaf.field} : {t('conditions.unknownField', 'champ inconnu')}
           </option>
         )}
         {grouped.map(([group, entries]) => (
@@ -859,7 +859,7 @@ export function ConditionBuilder({
             {t('conditions.summaryPrefix', 'Cette condition se lit :')}{' '}
           </span>
           {isAlwaysTrue(value)
-            ? emptyMeaning ?? t('conditions.always', 'toujours vraie — elle ne filtre rien')
+            ? emptyMeaning ?? t('conditions.always', 'toujours vraie : elle ne filtre rien')
             : summary}
         </p>
         {!isAlwaysTrue(value) && (

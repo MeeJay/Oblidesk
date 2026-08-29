@@ -12,7 +12,7 @@ import {
   BookOpen,
   Bookmark,
   Building2,
-  ChevronDown,
+  ChevronRight,
   ChevronsLeft,
   ChevronsRight,
   Clock4,
@@ -223,13 +223,94 @@ function readConfigRefs(payload: unknown): ConfigRef[] {
 // Small presentational pieces
 // ═════════════════════════════════════════════════════════════════════════════
 
-function SectionHeader({ children, action }: { children: ReactNode; action?: ReactNode }) {
+/**
+ * Remember which sidebar sections are folded.
+ *
+ * The sidebar body is one scroll area holding the main nav, the queues, the
+ * saved views and the admin links. On a laptop that is more rows than fit, and
+ * widening the sidebar does nothing for a VERTICAL overflow — which is exactly
+ * the complaint that produced this: "even at max width I can't see them all
+ * without scrolling". Folding the section you are not using right now (usually
+ * ADMINISTRATION) is what actually buys the space back.
+ */
+const SECTION_STORAGE_KEY = 'oblidesk:sidebarSections';
+
+function readFoldedSections(): Record<string, boolean> {
+  try {
+    const raw = localStorage.getItem(SECTION_STORAGE_KEY);
+    const parsed: unknown = raw === null ? null : JSON.parse(raw);
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, boolean>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function useFoldedSection(id: string): [boolean, () => void] {
+  const [folded, setFolded] = useState(() => readFoldedSections()[id] === true);
+
+  const toggle = useCallback(() => {
+    setFolded((previous) => {
+      const next = !previous;
+      persist(SECTION_STORAGE_KEY, JSON.stringify({ ...readFoldedSections(), [id]: next }));
+      return next;
+    });
+  }, [id]);
+
+  return [folded, toggle];
+}
+
+/**
+ * A foldable section label.
+ *
+ * The whole header is the hit target, not just the chevron: a 10px chevron is a
+ * miss, and the label is the thing the eye is already on.
+ */
+function SectionHeader({
+  children,
+  action,
+  folded,
+  onToggle,
+}: {
+  children: ReactNode;
+  action?: ReactNode;
+  folded?: boolean;
+  onToggle?: () => void;
+}) {
+  const label = (
+    <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-text-muted">
+      {children}
+    </span>
+  );
+
+  if (!onToggle) {
+    return (
+      <div className="flex items-center justify-between gap-2 px-3 pb-1 pt-4">
+        {label}
+        {action}
+      </div>
+    );
+  }
+
   return (
-    <div className="flex items-center justify-between gap-2 px-3 pb-1 pt-4">
-      <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-text-muted">
-        {children}
-      </span>
-      {action}
+    <div className="flex items-center justify-between gap-2 pb-1 pt-4">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={!folded}
+        className="flex min-w-0 flex-1 items-center gap-1.5 rounded-pill px-3 py-0.5 text-left transition-colors hover:bg-bg-hover"
+      >
+        <ChevronRight
+          size={11}
+          className={cn(
+            'shrink-0 text-text-muted transition-transform duration-150',
+            !folded && 'rotate-90',
+          )}
+        />
+        {label}
+      </button>
+      {action && <span className="pr-3">{action}</span>}
     </div>
   );
 }
@@ -260,7 +341,10 @@ export function Sidebar() {
   const { collapsed, floating } = useSidebarState();
 
   const [search, setSearch] = useState('');
-  const [adminOpen, setAdminOpen] = useState(true);
+  // Folded state for the three foldable sections, persisted under one key.
+  const [queuesFolded, toggleQueues] = useFoldedSection('queues');
+  const [viewsFolded, toggleViews] = useFoldedSection('views');
+  const [adminFolded, toggleAdmin] = useFoldedSection('admin');
   const [queues, setQueues] = useState<ConfigRef[]>([]);
   const [views, setViews] = useState<ConfigRef[]>([]);
   const [queueCounts, setQueueCounts] = useState<Record<string, CounterRow>>({});
@@ -681,7 +765,10 @@ export function Sidebar() {
             (HARD RULE 3). */}
         {queues.length > 0 && (
           <>
-            <SectionHeader>{t('nav.sectionQueues', 'Files')}</SectionHeader>
+            <SectionHeader folded={queuesFolded} onToggle={toggleQueues}>
+              {t('nav.sectionQueues', 'Files')}
+            </SectionHeader>
+            {!queuesFolded && (
             <nav className="space-y-0.5">
               {queues
                 .filter((queue) => matches(queue.name))
@@ -715,13 +802,17 @@ export function Sidebar() {
                   );
                 })}
             </nav>
+            )}
           </>
         )}
 
         {/* ── VUES (saved views) ────────────────────────────────────────────── */}
         {views.length > 0 && (
           <>
-            <SectionHeader>{t('nav.sectionViews', 'Vues')}</SectionHeader>
+            <SectionHeader folded={viewsFolded} onToggle={toggleViews}>
+              {t('nav.sectionViews', 'Vues')}
+            </SectionHeader>
+            {!viewsFolded && (
             <nav className="space-y-0.5">
               {views
                 .filter((view) => matches(view.name))
@@ -749,6 +840,7 @@ export function Sidebar() {
                   );
                 })}
             </nav>
+            )}
           </>
         )}
 
@@ -756,26 +848,11 @@ export function Sidebar() {
         {adminItems.length > 0 && (
           <>
             <div className="mx-3 mt-4 h-px bg-border" />
-            <SectionHeader
-              action={
-                <button
-                  type="button"
-                  onClick={() => setAdminOpen((value) => !value)}
-                  aria-expanded={adminOpen}
-                  aria-label={t('nav.sectionAdmin', 'Administration')}
-                  className="text-text-muted transition-colors hover:text-text-primary"
-                >
-                  <ChevronDown
-                    size={12}
-                    className={cn('transition-transform duration-200', !adminOpen && '-rotate-90')}
-                  />
-                </button>
-              }
-            >
+            <SectionHeader folded={adminFolded} onToggle={toggleAdmin}>
               {t('nav.sectionAdmin', 'Administration')}
             </SectionHeader>
 
-            {adminOpen && (
+            {!adminFolded && (
               <nav className="space-y-0.5">
                 {adminItems.map((item) => (
                   <Link

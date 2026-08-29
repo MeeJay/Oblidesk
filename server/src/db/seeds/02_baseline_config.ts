@@ -1,6 +1,7 @@
 import type { Knex } from 'knex';
 import { createHash } from 'crypto';
 
+import type { ConditionNode } from '@oblidesk/shared';
 import { DEFAULT_TENANT_SLUG, DEFAULT_ASSIGNMENT_GROUP_SLUG } from './01_core';
 
 /**
@@ -42,11 +43,12 @@ import { DEFAULT_TENANT_SLUG, DEFAULT_ASSIGNMENT_GROUP_SLUG } from './01_core';
 
 /**
  * ConditionNode — the one shape used by every guard, filter and rule predicate
- * in the whole product. Mirrors `ConditionNode` in @oblidesk/shared.
+ * in the whole product. IMPORTED from @oblidesk/shared, never re-declared: a
+ * local copy is how the shipped rules ended up structurally invalid.
  *
  * One uniform node:
- *   group : { op: 'and' | 'or', children: ConditionNode[] }
- *   negate: { op: 'not', children: [ConditionNode] }
+ *   group : { all: ConditionNode[] } | { any: ConditionNode[] }
+ *   negate: { not: ConditionNode }
  *   leaf  : { op: <comparison>, field: string, value?: unknown }
  *
  * Field paths are dotted and namespaced:
@@ -62,29 +64,27 @@ import { DEFAULT_TENANT_SLUG, DEFAULT_ASSIGNMENT_GROUP_SLUG } from './01_core';
  *   '@now+2h'     evaluation time plus an offset (m | h | d, business-time aware
  *                 when the surrounding object names a calendar)
  */
-export type ConditionOp =
-  | 'and' | 'or' | 'not'
-  | 'eq' | 'ne' | 'in' | 'not_in'
-  | 'gt' | 'gte' | 'lt' | 'lte'
-  | 'contains' | 'starts_with' | 'matches'
-  | 'is_empty' | 'is_not_empty' | 'changed';
-
-export interface ConditionNode {
-  op: ConditionOp;
-  field?: string;
-  value?: unknown;
-  children?: ConditionNode[];
-}
-
-const and = (...children: ConditionNode[]): ConditionNode => ({ op: 'and', children });
-const or = (...children: ConditionNode[]): ConditionNode => ({ op: 'or', children });
-const eq = (field: string, value: unknown): ConditionNode => ({ op: 'eq', field, value });
-const ne = (field: string, value: unknown): ConditionNode => ({ op: 'ne', field, value });
-const oneOf = (field: string, value: unknown[]): ConditionNode => ({ op: 'in', field, value });
-const gte = (field: string, value: unknown): ConditionNode => ({ op: 'gte', field, value });
-const lte = (field: string, value: unknown): ConditionNode => ({ op: 'lte', field, value });
-const isEmpty = (field: string): ConditionNode => ({ op: 'is_empty', field });
-const isNotEmpty = (field: string): ConditionNode => ({ op: 'is_not_empty', field });
+/*
+ * Condition helpers.
+ *
+ * These build the CANONICAL ConditionNode from @oblidesk/shared. This file used
+ * to declare its own local shape — { op: 'and', children: [...] } — which
+ * typechecked perfectly and was rejected at runtime by the one evaluator that
+ * matters: the real node is { all: [...] } / { any: [...] } / { not: … } or a
+ * leaf. The result was a shipped baseline whose two composite rules could never
+ * match, reported in the UI as "the condition tree is malformed". Importing the
+ * real type is what makes that class of bug a compile error instead.
+ */
+const and = (...children: ConditionNode[]): ConditionNode => ({ all: children });
+const or = (...children: ConditionNode[]): ConditionNode => ({ any: children });
+const not = (child: ConditionNode): ConditionNode => ({ not: child });
+const eq = (field: string, value: unknown): ConditionNode => ({ field, op: 'eq', value });
+const ne = (field: string, value: unknown): ConditionNode => ({ field, op: 'neq', value });
+const oneOf = (field: string, value: unknown[]): ConditionNode => ({ field, op: 'in', value });
+const gte = (field: string, value: unknown): ConditionNode => ({ field, op: 'gte', value });
+const lte = (field: string, value: unknown): ConditionNode => ({ field, op: 'lte', value });
+const isEmpty = (field: string): ConditionNode => ({ field, op: 'is_empty' });
+const isNotEmpty = (field: string): ConditionNode => ({ field, op: 'is_not_empty' });
 
 /** Categories a ticket is "live" in. Mirrors OPEN_CATEGORIES in migration 002. */
 const OPEN_CATEGORIES = [

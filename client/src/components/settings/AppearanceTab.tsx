@@ -19,6 +19,7 @@ import { SEEDED_LOCALES, type SupportedLocale } from '@oblidesk/shared';
 import type { User, UserPreferences } from '@oblidesk/shared';
 import apiClient from '@/api/client';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { Toggle } from '@/components/common/Toggle';
 import { applyTheme, currentTheme, THEME_OPTIONS, type AppTheme } from '@/utils/theme';
 import { cn } from '@/utils/cn';
 
@@ -192,7 +193,7 @@ export function AppearanceTab() {
           label={t('settings.anonymousMode', 'Mode anonyme')}
           description={t(
             'settings.anonymousModeDesc',
-            "Masque les noms des demandeurs — pratique pour une démonstration ou un partage d'écran.",
+            "Masque les noms des demandeurs. Pratique pour une démonstration ou un partage d'écran.",
           )}
           checked={preferences.anonymousMode === true}
           onChange={(next) => void patch({ anonymousMode: next })}
@@ -259,6 +260,7 @@ export function AppearanceTab() {
   );
 }
 
+/** One preference row: the shared switch, on the row's own background step. */
 function PreferenceSwitch({
   label,
   description,
@@ -271,31 +273,14 @@ function PreferenceSwitch({
   onChange: (next: boolean) => void;
 }) {
   return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      onClick={() => onChange(!checked)}
-      className="flex w-full items-start justify-between gap-4 rounded-card bg-bg-tertiary px-3 py-2.5 text-left transition-colors hover:bg-bg-hover"
-    >
-      <span>
-        <span className="block text-sm text-text-primary">{label}</span>
-        {description && <span className="mt-0.5 block text-xs text-text-muted">{description}</span>}
-      </span>
-      <span
-        className={cn(
-          'relative mt-0.5 h-5 w-9 shrink-0 rounded-pill transition-colors',
-          checked ? 'bg-accent' : 'bg-bg-active',
-        )}
-      >
-        <span
-          className={cn(
-            'absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all',
-            checked ? 'left-[1.125rem]' : 'left-0.5',
-          )}
-        />
-      </span>
-    </button>
+    <Toggle
+      checked={checked}
+      onChange={onChange}
+      labelFirst
+      label={label}
+      description={description}
+      className="w-full gap-4 rounded-card bg-bg-tertiary px-3 py-2.5 transition-colors hover:bg-bg-hover"
+    />
   );
 }
 

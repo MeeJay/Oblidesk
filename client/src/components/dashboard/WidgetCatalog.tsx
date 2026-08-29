@@ -126,7 +126,7 @@ export const WIDGET_TYPE_SPECS: readonly WidgetTypeSpec[] = [
     labelKey: 'widgetType.areaChart',
     label: 'Aires',
     descKey: 'widgetType.areaChartDesc',
-    desc: 'La même évolution, remplie — pour un volume plutôt qu’un taux.',
+    desc: 'La même évolution, remplie (pour un volume plutôt qu’un taux).',
     icon: AreaChart,
     group: 'chart',
     size: { w: 6, h: 4 },

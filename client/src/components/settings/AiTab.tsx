@@ -26,6 +26,7 @@ import apiClient from '@/api/client';
 import { Button } from '@/components/common/Button';
 import { Input } from '@/components/common/Input';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { Toggle } from '@/components/common/Toggle';
 import { cn } from '@/utils/cn';
 
 type Provider = AiConfig['provider'];
@@ -168,29 +169,18 @@ export function AiTab() {
             </p>
           </div>
 
-          <button
-            type="button"
-            role="switch"
-            aria-checked={config.enabled}
+          <Toggle
+            checked={config.enabled}
+            onChange={(next) => void patch({ enabled: next }, true)}
             disabled={saving || (!config.enabled && !usable)}
-            title={
+            disabledReason={
               !config.enabled && !usable
                 ? t('ai.cannotEnable', "Choisissez un fournisseur et enregistrez une clé avant d'activer.")
-                : undefined
+                : t('common.saving', 'Enregistrement…')
             }
-            onClick={() => void patch({ enabled: !config.enabled }, true)}
-            className={cn(
-              'relative mt-1 h-5 w-9 shrink-0 rounded-pill transition-colors disabled:opacity-40',
-              config.enabled ? 'bg-accent' : 'bg-bg-active',
-            )}
-          >
-            <span
-              className={cn(
-                'absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all',
-                config.enabled ? 'left-[1.125rem]' : 'left-0.5',
-              )}
-            />
-          </button>
+            aria-label={t('ai.enable', "Activer l'assistance par IA")}
+            className="mt-1 shrink-0"
+          />
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2">
@@ -232,7 +222,7 @@ export function AiTab() {
               onChange={(e) => setApiKey(e.target.value)}
               placeholder={
                 config.apiKeySet
-                  ? t('ai.apiKeyStored', 'Une clé est enregistrée — laisser vide pour la conserver')
+                  ? t('ai.apiKeyStored', 'Une clé est enregistrée : laisser vide pour la conserver')
                   : t('ai.apiKeyNone', 'Aucune clé enregistrée')
               }
               autoComplete="off"
@@ -304,36 +294,24 @@ export function AiTab() {
         {FEATURES.map((feature) => {
           const checked = config.features[feature.key] === true;
           return (
-            <button
+            <Toggle
               key={feature.key}
-              type="button"
-              role="switch"
-              aria-checked={checked}
+              checked={checked}
+              onChange={(next) => void patch({ features: { [feature.key]: next } }, true)}
               disabled={!config.enabled || saving}
-              onClick={() => void patch({ features: { [feature.key]: !checked } }, true)}
+              disabledReason={
+                !config.enabled
+                  ? t('ai.featureNeedsEnabled', "Activez l'assistance par IA pour utiliser cette fonction.")
+                  : t('common.saving', 'Enregistrement…')
+              }
+              labelFirst
+              label={t(feature.labelKey, feature.label)}
+              description={t(feature.descKey, feature.desc)}
               className={cn(
-                'flex w-full items-start justify-between gap-4 rounded-card bg-bg-tertiary px-3 py-2.5 text-left transition-colors',
+                'w-full gap-4 rounded-card bg-bg-tertiary px-3 py-2.5 transition-colors',
                 config.enabled ? 'hover:bg-bg-hover' : 'opacity-50',
               )}
-            >
-              <span>
-                <span className="block text-sm text-text-primary">{t(feature.labelKey, feature.label)}</span>
-                <span className="mt-0.5 block text-xs text-text-muted">{t(feature.descKey, feature.desc)}</span>
-              </span>
-              <span
-                className={cn(
-                  'relative mt-0.5 h-5 w-9 shrink-0 rounded-pill transition-colors',
-                  checked ? 'bg-accent' : 'bg-bg-active',
-                )}
-              >
-                <span
-                  className={cn(
-                    'absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all',
-                    checked ? 'left-[1.125rem]' : 'left-0.5',
-                  )}
-                />
-              </span>
-            </button>
+            />
           );
         })}
       </section>

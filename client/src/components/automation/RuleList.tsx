@@ -66,6 +66,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/common/Button';
 import { EmptyState } from '@/components/common/EmptyState';
+import { Toggle } from '@/components/common/Toggle';
 import { formatRelative } from '@/utils/format';
 import { cn } from '@/utils/cn';
 import {
@@ -274,31 +275,20 @@ function RuleRow({
             <RotateCcw size={13} />
           </button>
         )}
-        <button
-          type="button"
-          role="switch"
-          aria-checked={rule.enabled}
+        <Toggle
+          size="sm"
+          checked={rule.enabled}
+          onChange={onToggle}
           disabled={busy || rule.shared}
-          onClick={() => onToggle(!rule.enabled)}
-          title={
+          disabledReason={
             rule.shared
               ? t('rules.sharedReadOnly', 'Règle partagée : à modifier depuis le locataire maître.')
-              : rule.enabled
-                ? t('rules.disable', 'Désactiver')
-                : t('rules.enable', 'Activer')
+              : t('common.saving', 'Enregistrement…')
           }
-          className={cn(
-            'relative h-5 w-9 shrink-0 rounded-pill transition-colors disabled:opacity-40',
-            rule.enabled ? 'bg-accent' : 'bg-bg-tertiary',
-          )}
-        >
-          <span
-            className={cn(
-              'absolute top-0.5 h-4 w-4 rounded-full bg-bg-primary transition-transform',
-              rule.enabled ? 'translate-x-[18px]' : 'translate-x-0.5',
-            )}
-          />
-        </button>
+          aria-label={t('rules.toggleRule', 'Activer la règle {{name}}', {
+            name: rule.name || rule.slug,
+          })}
+        />
       </div>
     </li>
   );
@@ -426,7 +416,7 @@ export function RuleList({
           <span className="text-[12.5px] text-text-primary">
             {t(
               'rules.reorderPending',
-              'Nouvel ordre non appliqué. L’ordre décide de ce que le bureau fait — confirmez pour l’enregistrer.',
+              'Nouvel ordre non appliqué. L’ordre décide de ce que le bureau fait. Confirmez pour l’enregistrer.',
             )}
           </span>
           <div className="ml-auto flex items-center gap-1.5">

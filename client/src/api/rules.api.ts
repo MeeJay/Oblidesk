@@ -702,7 +702,7 @@ const TICKET_FIELD_PATHS: readonly StaticField[] = [
     key: 'field.occurredAt',
     kind: 'timestamp',
     group: GROUP_TIME,
-    help: 'L’instant où l’incident a eu lieu — distinct de la date de création.',
+    help: 'L’instant où l’incident a eu lieu (distinct de la date de création).',
   },
   { path: 'created_at', fr: 'Date de création', key: 'field.createdAt', kind: 'timestamp', group: GROUP_TIME },
   { path: 'updated_at', fr: 'Dernière modification', key: 'field.updatedAt', kind: 'timestamp', group: GROUP_TIME },

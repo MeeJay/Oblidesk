@@ -174,7 +174,7 @@ export function SsoEnrollPage() {
               <span>
                 {t(
                   'ssoEnroll.passwordManagedByObligate',
-                  'Votre mot de passe est géré par Obligate — modifiez-le depuis le portail Obligate.',
+                  'Votre mot de passe est géré par Obligate. Modifiez-le depuis le portail Obligate.',
                 )}
               </span>
             </p>

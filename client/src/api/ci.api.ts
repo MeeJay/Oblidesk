@@ -180,7 +180,7 @@ async function probe<T>(options: ProbeOptions): Promise<SectionResult<T>> {
       fetchedAt: state.lastGood?.at ?? new Date().toISOString(),
       reasonKey: 'ci.section.circuitOpen',
       reason:
-        'Source injoignable à plusieurs reprises — les appels sont suspendus une minute.',
+        'Source injoignable à plusieurs reprises. Les appels sont suspendus une minute.',
     });
   }
 
@@ -288,11 +288,11 @@ export type CiLiveSection = (typeof CI_LIVE_SECTIONS)[number];
 export const CI_SECTION_LABELS: Readonly<
   Record<CiLiveSection, { key: string; fallback: string }>
 > = {
-  obliance: { key: 'ci.section.obliance', fallback: 'Poste — Obliance' },
-  obliview: { key: 'ci.section.obliview', fallback: 'Supervision — Obliview' },
-  obliguard: { key: 'ci.section.obliguard', fallback: 'Sécurité — Obliguard' },
-  oblimap: { key: 'ci.section.oblimap', fallback: 'Site — Oblimap' },
-  obligate: { key: 'ci.section.obligate', fallback: 'Identité — Obligate' },
+  obliance: { key: 'ci.section.obliance', fallback: 'Poste (Obliance)' },
+  obliview: { key: 'ci.section.obliview', fallback: 'Supervision (Obliview)' },
+  obliguard: { key: 'ci.section.obliguard', fallback: 'Sécurité (Obliguard)' },
+  oblimap: { key: 'ci.section.oblimap', fallback: 'Site (Oblimap)' },
+  obligate: { key: 'ci.section.obligate', fallback: 'Identité (Obligate)' },
 };
 
 /**

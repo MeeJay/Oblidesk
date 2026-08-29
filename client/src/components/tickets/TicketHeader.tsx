@@ -247,7 +247,7 @@ export default function TicketHeader({
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[11px] text-text-muted">
         <span
           className="inline-flex items-center gap-1.5"
-          title={`${t('ticket.occurredAtTooltip', 'Quand l’incident s’est produit — saisi à la prise en charge, jamais recalculé')} : ${formatAbsolute(ticket.occurredAt)}`}
+          title={`${t('ticket.occurredAtTooltip', 'Quand l’incident s’est produit (saisi à la prise en charge, jamais recalculé)')} : ${formatAbsolute(ticket.occurredAt)}`}
         >
           <AlarmClock size={11} aria-hidden />
           {t('ticket.occurredAt', 'survenu')} {formatRelative(ticket.occurredAt, t, now)}

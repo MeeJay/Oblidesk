@@ -636,7 +636,7 @@ export function TicketConversation({
           <span>
             {t(
               'tickets.remoteUpdate',
-              'Une version plus récente est arrivée pendant votre saisie — elle n’a pas été appliquée.',
+              'Une version plus récente est arrivée pendant votre saisie. Elle n’a pas été appliquée.',
             )}
           </span>
           <button
@@ -776,7 +776,7 @@ export function TicketConversation({
               label={t('tickets.occurredAt', 'Survenu le')}
               helpText={t(
                 'tickets.occurredAtHelp',
-                'Quand l’incident s’est réellement produit — distinct de la date de création.',
+                'Quand l’incident s’est réellement produit (distinct de la date de création).',
               )}
               type="datetime"
               value={toLocalInput(ticket.occurredAt)}
@@ -846,7 +846,7 @@ export function TicketConversation({
         size="md"
         title={
           pendingTransition
-            ? t('tickets.transition.title', 'Changer le statut') + ' — ' + transitionLabel(pendingTransition)
+            ? t('tickets.transition.title', 'Changer le statut') + ' : ' + transitionLabel(pendingTransition)
             : ''
         }
         subtitle={t(
@@ -909,7 +909,7 @@ export function TicketConversation({
                 onChange={(event) => setTransitionComment(event.target.value)}
                 placeholder={t(
                   'tickets.transition.commentPlaceholder',
-                  'Optionnel — sera ajouté au journal.',
+                  'Optionnel : sera ajouté au journal.',
                 )}
                 className="resize-y rounded-card bg-bg-tertiary px-2.5 py-1.5 text-[13px] text-text-primary outline-none focus:ring-1 focus:ring-accent"
               />
@@ -1042,7 +1042,7 @@ export function TicketDetailPage(): JSX.Element {
           title={t('tickets.badId', 'Cette adresse ne désigne pas un ticket')}
           description={t(
             'tickets.badIdHint',
-            'Un ticket s’ouvre par son identifiant numérique — utilisez la recherche ou la palette de commandes pour le retrouver.',
+            'Un ticket s’ouvre par son identifiant numérique. Utilisez la recherche ou la palette de commandes pour le retrouver.',
           )}
           action={
             <button

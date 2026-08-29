@@ -261,7 +261,7 @@ export function ProfilePage() {
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
-      toast.success(t('profile.passwordChanged', 'Mot de passe modifié — vos autres sessions sont fermées.'));
+      toast.success(t('profile.passwordChanged', 'Mot de passe modifié. Vos autres sessions sont fermées.'));
     } catch (err) {
       toast.error(serverError(err, t('profile.passwordFailed', 'Le mot de passe actuel est incorrect.')));
     } finally {
