@@ -1,0 +1,59 @@
+# Development overlay - applied ON TOP of docker-compose.build.yml.
+# Usage: docker compose -f docker-compose.build.yml -f docker-compose.dev.yml up --build
+#        (or simply: npm run dev)
+#
+# Both services run from the builder stage with the sources bind-mounted, so
+# tsx watch (server) and Vite HMR (client) pick up edits without a rebuild.
+
+services:
+  postgres:
+    ports:
+      - "5432:5432"
+
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+      target: builder
+    # The builder stage's last WORKDIR is /app (it uses `cd server && ...`), so
+    # the command has to be anchored explicitly.
+    working_dir: /app/server
+    # npx tsx, never ts-node - ts-node via npx doesn't pick up custom .d.ts files.
+    command: npx tsx watch src/index.ts
+    volumes:
+      - ./server/src:/app/server/src
+      - ./shared/src:/app/shared/src
+      - ${CUSTOM_DIR:-./custom}:/custom
+    ports:
+      - "3001:3001"
+    environment:
+      NODE_ENV: development
+      PORT: 3001
+      DATABASE_URL: postgres://oblidesk:${DB_PASSWORD:-changeme}@postgres:5432/oblidesk
+      SESSION_SECRET: dev-secret
+      CLIENT_ORIGIN: http://localhost:5177
+      APP_NAME: Oblidesk
+      DEFAULT_ADMIN_USERNAME: admin
+      DEFAULT_ADMIN_PASSWORD: admin123
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-0000000000000000000000000000000000000000000000000000000000000000}
+
+  client:
+    build:
+      context: .
+      dockerfile: client/Dockerfile
+      target: builder
+    # The builder stage carries no HEALTHCHECK (that lives in the production
+    # stage), so the base file's `condition: service_healthy` would never be
+    # satisfied here. Wait for the process to start instead.
+    depends_on:
+      server:
+        condition: service_started
+    working_dir: /app/client
+    command: npx vite --host 0.0.0.0 --port 5177
+    volumes:
+      - ./client/src:/app/client/src
+      - ./shared/src:/app/shared/src
+    ports:
+      - "5177:5177"
+    environment:
+      VITE_API_URL: http://localhost:3001

@@ -1,0 +1,38 @@
+# Use this compose file if you already have PostgreSQL running (e.g. on Unraid).
+# Usage: docker compose -f docker-compose.external-db.yml up -d
+#
+# Required .env variables:
+#   DATABASE_URL=postgres://oblidesk:<password>@<host>:5432/oblidesk
+#   SESSION_SECRET=<random-string>
+#   ENCRYPTION_KEY=<64 hex chars>
+#
+# The database must exist before the first start; the server creates its own
+# schema (Knex migrations run at boot) but not the database itself.
+
+services:
+  server:
+    image: meejay/oblidesk-server:${OBLIDESK_VERSION:-latest}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: ${DATABASE_URL}
+      SESSION_SECRET: ${SESSION_SECRET}
+      CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost}
+      APP_NAME: ${APP_NAME:-Oblidesk}
+      DEFAULT_ADMIN_USERNAME: ${DEFAULT_ADMIN_USERNAME:-admin}
+      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-admin123}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+    volumes:
+      # Attachment blob store - survives image updates.
+      # Layout: /custom/attachments/<tenant_id>/<yyyy>/<mm>/<sha256[0:2]>/<sha256>
+      - ${CUSTOM_DIR:-./custom}:/custom
+
+  client:
+    image: meejay/oblidesk-client:${OBLIDESK_VERSION:-latest}
+    restart: unless-stopped
+    depends_on:
+      server:
+        condition: service_healthy
+    ports:
+      - "${LISTEN_PORT:-3004}:80"

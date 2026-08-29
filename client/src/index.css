@@ -1,0 +1,560 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Theme CSS custom properties
+   Values are space-separated RGB triplets so Tailwind's opacity modifier syntax
+   (e.g. bg-accent/30) works: Tailwind emits  rgb(var(--c-X) / 0.3)
+
+   The list below is exactly what client/tailwind.config.ts maps to class names.
+   Adding a colour to the Tailwind config without adding the matching variable
+   to EVERY block here produces `rgb( / 1)` — invalid CSS, silently dropped, and
+   the element paints transparent. Add to all four blocks or to none.
+
+   Ticketing note (HARD RULE 5): the status tokens are keyed by the hard-coded
+   status CATEGORY, never by a tenant's configurable status slug. A tenant that
+   renames "Pending" to "Waiting on customer" still resolves to
+   `--c-status-pending-requester`, because the category did not move.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/* ── Obli Operator (default) — Obli design system v1, teinte bleu nuit + accent
+       cyan Oblidesk #22b8f5. Spec: D:\Mockup\obli-design-system.md §2 + §10. ── */
+:root,
+[data-theme="obli-operator"] {
+  --c-bg-primary:            11 13 26;
+  --c-bg-secondary:          19 23 40;
+  --c-bg-tertiary:           24 28 48;
+  --c-bg-hover:              29 34 56;
+  --c-bg-active:             34 39 64;
+
+  /* Borders kept subtle on a dark base — Tailwind's `border-border` resolves
+     to `rgb(var(--c-border))` (no automatic alpha), so the value here MUST
+     be a near-bg shade rather than 255/255/255. */
+  --c-border:                42 48 72;
+  --c-border-light:          62 70 100;
+
+  --c-text-primary:          240 244 252;
+  --c-text-secondary:        180 188 215;
+  --c-text-muted:            130 140 175;
+
+  /* ── Ticket status categories (HARD RULE 5) ──────────────────────────────
+     new → open → pending_* / scheduled → resolved → closed / cancelled.
+     Hue tells the agent what the ticket is WAITING ON at a glance:
+     blue = untouched, cyan = being worked, amber = the requester owes us,
+     violet = a vendor owes us, indigo = parked on a date, green = fixed,
+     grey = archived. */
+  --c-status-new:                    96 165 250;
+  --c-status-new-bg:                 17 30 62;
+  --c-status-open:                   34 211 238;
+  --c-status-open-bg:                10 44 56;
+  --c-status-pending-requester:      245 166 35;
+  --c-status-pending-requester-bg:   46 33 17;
+  --c-status-pending-third-party:    192 132 252;
+  --c-status-pending-third-party-bg: 40 25 60;
+  --c-status-scheduled:              129 140 248;
+  --c-status-scheduled-bg:           26 28 66;
+  --c-status-resolved:               30 221 138;
+  --c-status-resolved-bg:            12 40 26;
+  --c-status-closed:                 130 140 175;
+  --c-status-closed-bg:              24 28 48;
+  --c-status-cancelled:              107 115 153;
+  --c-status-cancelled-bg:           19 23 40;
+
+  /* ── Priorities p1 (critical) → p4 (low) ─────────────────────────────────
+     Priorities are configurable per tenant, but every priority config carries
+     a rank 1-4 that selects one of these four. */
+  --c-priority-p1:           239 68 68;
+  --c-priority-p1-bg:        48 18 18;
+  --c-priority-p2:           249 115 22;
+  --c-priority-p2-bg:        48 27 10;
+  --c-priority-p3:           96 165 250;
+  --c-priority-p3-bg:        17 30 62;
+  --c-priority-p4:           130 140 175;
+  --c-priority-p4-bg:        24 28 48;
+
+  /* ── SLA clock ───────────────────────────────────────────────────────────
+     ok = comfortably inside the target · warn = inside the at-risk window ·
+     breach = target passed · paused = the clock is stopped because the status
+     CATEGORY pauses it (pending_* / scheduled). */
+  --c-sla-ok:                30 221 138;
+  --c-sla-ok-bg:             12 40 26;
+  --c-sla-warn:              245 166 35;
+  --c-sla-warn-bg:           46 33 17;
+  --c-sla-breach:            239 68 68;
+  --c-sla-breach-bg:         48 18 18;
+  --c-sla-paused:            130 140 175;
+  --c-sla-paused-bg:         24 28 48;
+
+  /* ── Generic tone aliases ────────────────────────────────────────────────
+     Read by shared/src/themes.ts (`THEME_TOKENS`) when a theme is applied
+     programmatically, and by any chrome that needs "good / bad / waiting"
+     without knowing a ticket category. Keep in sync with the block above. */
+  --c-status-up:             30 221 138;
+  --c-status-up-bg:          12 40 26;
+  --c-status-down:           107 115 153;
+  --c-status-down-bg:        24 28 48;
+  --c-status-pending:        79 123 255;
+  --c-status-pending-bg:     16 24 56;
+  --c-status-warning:        245 166 35;
+  --c-status-warning-bg:     46 33 17;
+  --c-status-breached:       239 68 68;
+  --c-status-breached-bg:    48 18 18;
+  --c-status-critical:       224 58 58;
+  --c-status-critical-bg:    48 18 18;
+  --c-status-neutral:        107 115 153;
+  --c-status-neutral-bg:     19 23 40;
+
+  /* Oblidesk accent — cyan #22b8f5 (highlight #5fd0ff) per design system §1 */
+  --c-accent:                34 184 245;
+  --c-accent-hover:          95 208 255;
+  --c-accent-dark:           23 137 187;
+  --c-primary:               34 184 245;
+
+  /* Depth without borders (HARD RULE 11): a background step plus these two. */
+  --shadow-card: 0 1px 0 0 rgba(255, 255, 255, 0.03), 0 6px 24px -8px rgba(0, 0, 0, 0.45);
+  --shadow-glow: 0 0 0 1px rgb(var(--c-accent) / 0.18) inset, 0 6px 28px -10px rgb(var(--c-accent) / 0.25);
+}
+
+/* ── Obli Daylight — light companion to Obli Operator. "Nordic Mist" (Nord Snow
+       Storm) surface: cushioned blue-gray page, Polar Night text, depth via soft
+       shadow. Unlike the other apps' Daylight, Oblidesk DOES redefine the accent
+       here: #22b8f5 disappears on a white card, so the light theme uses the
+       deeper cyan #0284c7 that shared/themes.ts carries as
+       OBLIDESK_ACCENT_LIGHT. ───────────────────────────────────────────────── */
+[data-theme="obli-daylight"] {
+  --c-bg-primary:            229 233 240;   /* #e5e9f0  Snow Storm page bg */
+  --c-bg-secondary:          236 239 244;   /* #eceff4  cards */
+  --c-bg-tertiary:           216 222 233;   /* #d8dee9  inputs / pill container */
+
+  /* CRITICAL: hover/active/border MUST be plain RGB triplets — no embedded alpha.
+     Tailwind always emits rgb(var(--x) / <alpha-value>); a stored "R G B / A"
+     produces invalid CSS, the rule is dropped, and the app falls back to thick
+     black borders. Use near-surface tones instead. */
+  --c-bg-hover:              222 227 236;
+  --c-bg-active:             210 217 229;
+
+  --c-border:                212 220 231;
+  --c-border-light:          224 230 240;
+
+  --c-text-primary:          46 52 64;       /* #2e3440  Polar Night */
+  --c-text-secondary:        76 86 106;      /* #4c566a */
+  --c-text-muted:            129 141 161;    /* #818da1 */
+
+  /* Status categories — same semantics, darkened so they read on a white card
+     and paired with a tinted (not dark) background. */
+  --c-status-new:                    37 99 235;
+  --c-status-new-bg:                 219 234 254;
+  --c-status-open:                   8 145 178;
+  --c-status-open-bg:                207 240 249;
+  --c-status-pending-requester:      180 83 9;
+  --c-status-pending-requester-bg:   254 243 199;
+  --c-status-pending-third-party:    126 58 187;
+  --c-status-pending-third-party-bg: 243 232 255;
+  --c-status-scheduled:              79 70 229;
+  --c-status-scheduled-bg:           224 231 255;
+  --c-status-resolved:               16 132 79;
+  --c-status-resolved-bg:            220 252 231;
+  --c-status-closed:                 100 116 139;
+  --c-status-closed-bg:              216 222 233;
+  --c-status-cancelled:              129 141 161;
+  --c-status-cancelled-bg:           222 227 236;
+
+  --c-priority-p1:           190 24 24;
+  --c-priority-p1-bg:        254 226 226;
+  --c-priority-p2:           180 74 8;
+  --c-priority-p2-bg:        255 237 213;
+  --c-priority-p3:           37 99 235;
+  --c-priority-p3-bg:        219 234 254;
+  --c-priority-p4:           100 116 139;
+  --c-priority-p4-bg:        216 222 233;
+
+  --c-sla-ok:                16 132 79;
+  --c-sla-ok-bg:             220 252 231;
+  --c-sla-warn:              180 83 9;
+  --c-sla-warn-bg:           254 243 199;
+  --c-sla-breach:            190 24 24;
+  --c-sla-breach-bg:         254 226 226;
+  --c-sla-paused:            100 116 139;
+  --c-sla-paused-bg:         216 222 233;
+
+  --c-status-up:             16 163 96;
+  --c-status-up-bg:          220 252 231;
+  --c-status-down:           148 163 184;
+  --c-status-down-bg:        216 222 233;
+  --c-status-pending:        37 99 235;
+  --c-status-pending-bg:     219 234 254;
+  --c-status-warning:        217 119 6;
+  --c-status-warning-bg:     254 243 199;
+  --c-status-breached:       190 24 24;
+  --c-status-breached-bg:    254 226 226;
+  --c-status-critical:       220 38 38;
+  --c-status-critical-bg:    254 226 226;
+  --c-status-neutral:        100 116 139;
+  --c-status-neutral-bg:     216 222 233;
+
+  /* Light-tuned cyan — #0284c7 / #0ea5e9 / #075985 (OBLIDESK_ACCENT_LIGHT). */
+  --c-accent:                2 132 199;
+  --c-accent-hover:          14 165 233;
+  --c-accent-dark:           7 89 133;
+  --c-primary:               2 132 199;
+
+  --shadow-card: 0 1px 2px 0 rgba(46, 52, 64, 0.03), 0 6px 24px -12px rgba(46, 52, 64, 0.08);
+  --shadow-glow: 0 0 0 1px rgb(var(--c-accent) / 0.18) inset, 0 8px 32px -12px rgb(var(--c-accent) / 0.22);
+}
+
+/* ── Modern UI (legacy) — neutral near-black, re-accented in Oblidesk cyan ─── */
+[data-theme="modern"] {
+  --c-bg-primary:            13 13 12;
+  --c-bg-secondary:          21 21 19;
+  --c-bg-tertiary:           29 28 27;
+  --c-bg-hover:              37 36 34;
+  --c-bg-active:             46 45 42;
+
+  /* Same rule as above — a near-bg shade, never 255/255/255. */
+  --c-border:                55 54 51;
+  --c-border-light:          69 67 63;
+
+  --c-text-primary:          229 227 224;
+  --c-text-secondary:        140 137 133;
+  --c-text-muted:            107 104 100;
+
+  --c-status-new:                    88 166 255;
+  --c-status-new-bg:                 13 37 70;
+  --c-status-open:                   57 197 219;
+  --c-status-open-bg:                8 45 52;
+  --c-status-pending-requester:      210 153 34;
+  --c-status-pending-requester-bg:   46 33 17;
+  --c-status-pending-third-party:    163 113 247;
+  --c-status-pending-third-party-bg: 39 26 69;
+  --c-status-scheduled:              124 132 240;
+  --c-status-scheduled-bg:           26 27 60;
+  --c-status-resolved:               46 160 67;
+  --c-status-resolved-bg:            13 40 24;
+  --c-status-closed:                 140 137 133;
+  --c-status-closed-bg:              29 28 27;
+  --c-status-cancelled:              107 104 100;
+  --c-status-cancelled-bg:           21 21 19;
+
+  --c-priority-p1:           248 81 73;
+  --c-priority-p1-bg:        61 20 24;
+  --c-priority-p2:           219 109 40;
+  --c-priority-p2-bg:        52 28 12;
+  --c-priority-p3:           88 166 255;
+  --c-priority-p3-bg:        13 37 70;
+  --c-priority-p4:           140 137 133;
+  --c-priority-p4-bg:        29 28 27;
+
+  --c-sla-ok:                46 160 67;
+  --c-sla-ok-bg:             13 40 24;
+  --c-sla-warn:              210 153 34;
+  --c-sla-warn-bg:           46 33 17;
+  --c-sla-breach:            248 81 73;
+  --c-sla-breach-bg:         61 20 24;
+  --c-sla-paused:            140 137 133;
+  --c-sla-paused-bg:         29 28 27;
+
+  --c-status-up:             46 160 67;
+  --c-status-up-bg:          13 40 24;
+  --c-status-down:           140 137 133;
+  --c-status-down-bg:        29 28 27;
+  --c-status-pending:        88 166 255;
+  --c-status-pending-bg:     13 37 70;
+  --c-status-warning:        210 153 34;
+  --c-status-warning-bg:     46 33 17;
+  --c-status-breached:       248 81 73;
+  --c-status-breached-bg:    61 20 24;
+  --c-status-critical:       248 81 73;
+  --c-status-critical-bg:    61 20 24;
+  --c-status-neutral:        140 137 133;
+  --c-status-neutral-bg:     29 28 27;
+
+  --c-accent:                34 184 245;
+  --c-accent-hover:          95 208 255;
+  --c-accent-dark:           23 137 187;
+  --c-primary:               34 184 245;
+
+  --shadow-card: 0 1px 0 0 rgba(255, 255, 255, 0.03), 0 6px 24px -8px rgba(0, 0, 0, 0.55);
+  --shadow-glow: 0 0 0 1px rgb(var(--c-accent) / 0.18) inset, 0 6px 28px -10px rgb(var(--c-accent) / 0.25);
+}
+
+/* ── Neon UI — deep dark with a cyan neon glow ─────────────────────────────── */
+[data-theme="neon"] {
+  --c-bg-primary:            7 8 10;
+  --c-bg-secondary:          13 14 17;
+  --c-bg-tertiary:           19 20 24;
+  --c-bg-hover:              27 27 32;
+  --c-bg-active:             36 36 42;
+
+  /* Same rule as above — a near-bg shade, never 255/255/255. */
+  --c-border:                50 51 57;
+  --c-border-light:          65 66 73;
+
+  --c-text-primary:          234 242 248;
+  --c-text-secondary:        134 150 164;
+  --c-text-muted:            92 106 120;
+
+  --c-status-new:                    80 170 255;
+  --c-status-new-bg:                 0 25 52;
+  --c-status-open:                   0 224 255;
+  --c-status-open-bg:                0 32 40;
+  --c-status-pending-requester:      255 190 0;
+  --c-status-pending-requester-bg:   36 22 0;
+  --c-status-pending-third-party:    180 100 255;
+  --c-status-pending-third-party-bg: 28 0 60;
+  --c-status-scheduled:              120 130 255;
+  --c-status-scheduled-bg:           10 12 48;
+  --c-status-resolved:               0 195 95;
+  --c-status-resolved-bg:            0 28 14;
+  --c-status-closed:                 106 118 130;
+  --c-status-closed-bg:              19 20 24;
+  --c-status-cancelled:              92 106 120;
+  --c-status-cancelled-bg:           13 14 17;
+
+  --c-priority-p1:           255 56 96;
+  --c-priority-p1-bg:        42 0 16;
+  --c-priority-p2:           255 130 40;
+  --c-priority-p2-bg:        40 16 0;
+  --c-priority-p3:           80 170 255;
+  --c-priority-p3-bg:        0 25 52;
+  --c-priority-p4:           106 118 130;
+  --c-priority-p4-bg:        19 20 24;
+
+  --c-sla-ok:                0 195 95;
+  --c-sla-ok-bg:             0 28 14;
+  --c-sla-warn:              255 190 0;
+  --c-sla-warn-bg:           36 22 0;
+  --c-sla-breach:            255 56 96;
+  --c-sla-breach-bg:         42 0 16;
+  --c-sla-paused:            106 118 130;
+  --c-sla-paused-bg:         19 20 24;
+
+  --c-status-up:             0 195 95;
+  --c-status-up-bg:          0 28 14;
+  --c-status-down:           106 118 130;
+  --c-status-down-bg:        19 20 24;
+  --c-status-pending:        80 170 255;
+  --c-status-pending-bg:     0 25 52;
+  --c-status-warning:        255 190 0;
+  --c-status-warning-bg:     36 22 0;
+  --c-status-breached:       255 56 96;
+  --c-status-breached-bg:    42 0 16;
+  --c-status-critical:       255 56 96;
+  --c-status-critical-bg:    42 0 16;
+  --c-status-neutral:        106 118 130;
+  --c-status-neutral-bg:     19 20 24;
+
+  --c-accent:                34 184 245;
+  --c-accent-hover:          95 208 255;
+  --c-accent-dark:           23 137 187;
+  --c-primary:               34 184 245;
+
+  --shadow-card: 0 1px 0 0 rgba(255, 255, 255, 0.04), 0 8px 30px -10px rgba(0, 0, 0, 0.7);
+  --shadow-glow: 0 0 0 1px rgb(var(--c-accent) / 0.35) inset, 0 0 28px -6px rgb(var(--c-accent) / 0.45);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Base styles
+   ───────────────────────────────────────────────────────────────────────────── */
+@layer base {
+  html {
+    /* Rajdhani is a CONDENSED DISPLAY face (design system §11): gorgeous at
+       24px+, blurry at 13px. It is opt-in through `font-display`, never the
+       document default. Body copy, nav rows and form fields are Inter. */
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans',
+      Helvetica, Arial, sans-serif;
+  }
+
+  body {
+    @apply bg-bg-primary text-text-primary antialiased;
+  }
+
+  /* Numerals line up in ticket keys, counters and SLA clocks. */
+  .font-mono,
+  code,
+  kbd,
+  pre {
+    font-variant-numeric: tabular-nums;
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-bg-primary;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-border rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-border-light;
+  }
+
+  /* Focus is a RING, never a border — a border would change the box size and
+     break HARD RULE 11's "no border on pills / buttons". */
+  :focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px rgb(var(--c-accent) / 0.55);
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Utilities
+   ───────────────────────────────────────────────────────────────────────────── */
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+/* Live-alert toasts and the command palette fade in rather than pop. */
+@keyframes obli-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-fade-in {
+  animation: obli-fade-in 160ms ease-out;
+}
+
+@keyframes obli-scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.animate-scale-in {
+  animation: obli-scale-in 130ms ease-out;
+}
+
+/* The SLA clock ticks toward a breach — a slow pulse, not a strobe. */
+@keyframes obli-sla-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+.animate-sla-pulse {
+  animation: obli-sla-pulse 2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-in,
+  .animate-scale-in,
+  .animate-sla-pulse {
+    animation: none;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Neon UI — cyan glow effects.
+   All selectors are flat (not nested) for PostCSS compatibility.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/* ── Header bottom accent line — cyan radial gradient ──────────────────────── */
+[data-theme="neon"] header {
+  position: relative;
+}
+[data-theme="neon"] header::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: radial-gradient(
+    ellipse 70% 100% at 50% 100%,
+    rgb(34 184 245 / 0.9) 0%,
+    rgb(34 184 245 / 0.4) 40%,
+    transparent 70%
+  );
+  pointer-events: none;
+}
+
+/* ── Active nav item — cyan flash ──────────────────────────────────────────── */
+[data-theme="neon"] .bg-bg-active {
+  background-color: rgb(34 184 245 / 0.08) !important;
+  box-shadow: inset 3px 0 0 rgb(34 184 245 / 1);
+}
+[data-theme="neon"] .bg-bg-active .text-text-primary {
+  color: rgb(34 184 245 / 1) !important;
+  text-shadow: 0 0 10px rgb(34 184 245 / 0.6);
+}
+[data-theme="neon"] .bg-bg-active svg {
+  color: rgb(34 184 245 / 1) !important;
+  filter: drop-shadow(0 0 4px rgb(34 184 245 / 0.65));
+}
+
+/* ── Accent & primary text glow ────────────────────────────────────────────── */
+[data-theme="neon"] .text-accent {
+  text-shadow: 0 0 12px rgb(var(--c-accent) / 0.5);
+}
+[data-theme="neon"] .text-primary {
+  text-shadow: 0 0 12px rgb(var(--c-accent) / 0.5);
+}
+
+/* ── Ticket status glows — driven by the CATEGORY, never the slug ──────────── */
+[data-theme="neon"] .text-status-new {
+  text-shadow: 0 0 10px rgb(var(--c-status-new) / 0.55);
+}
+[data-theme="neon"] .text-status-open {
+  text-shadow: 0 0 10px rgb(var(--c-status-open) / 0.6);
+}
+[data-theme="neon"] .text-status-resolved {
+  text-shadow: 0 0 10px rgb(var(--c-status-resolved) / 0.6);
+}
+[data-theme="neon"] .text-sla-breach {
+  text-shadow: 0 0 12px rgb(var(--c-sla-breach) / 0.7);
+}
+[data-theme="neon"] .text-sla-warn {
+  text-shadow: 0 0 10px rgb(var(--c-sla-warn) / 0.6);
+}
+[data-theme="neon"] .text-priority-p1 {
+  text-shadow: 0 0 12px rgb(var(--c-priority-p1) / 0.7);
+}
+
+/* ── Ticket-row edge tint — driven by the [data-sla] attribute the ticket
+      list writes, so an at-risk row is findable without reading the clock. ─── */
+[data-theme="neon"] [data-sla='breach'] {
+  box-shadow: inset 3px 0 0 rgb(var(--c-sla-breach) / 1), 0 0 10px -2px rgb(var(--c-sla-breach) / 0.45);
+}
+[data-theme="neon"] [data-sla='warn'] {
+  box-shadow: inset 3px 0 0 rgb(var(--c-sla-warn) / 1);
+}
+
+/* ── Accent ring glow ──────────────────────────────────────────────────────── */
+[data-theme="neon"] .ring-accent {
+  box-shadow: 0 0 0 1px rgb(var(--c-accent) / 0.4), 0 0 12px rgb(var(--c-accent) / 0.2);
+}
+
+/* ── Primary button glow ───────────────────────────────────────────────────── */
+[data-theme="neon"] button.bg-accent,
+[data-theme="neon"] a.bg-accent,
+[data-theme="neon"] button.bg-primary {
+  box-shadow: 0 0 14px rgb(var(--c-accent) / 0.45), 0 2px 8px rgb(0 0 0 / 0.4);
+}
+
+/* ── Status dot glow ───────────────────────────────────────────────────────── */
+[data-theme="neon"] .bg-status-open,
+[data-theme="neon"] .bg-status-resolved,
+[data-theme="neon"] .bg-sla-breach {
+  box-shadow: 0 0 8px currentColor;
+}

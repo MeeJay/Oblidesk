@@ -1,0 +1,55 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: oblidesk
+      POSTGRES_USER: oblidesk
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # Expose on LAN so you can run migrations from your PC / pgAdmin.
+    # Remove this if you don't need external access.
+    #ports:
+    #  - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oblidesk"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+  server:
+    image: meejay/oblidesk-server:${OBLIDESK_VERSION:-latest}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: postgres://oblidesk:${DB_PASSWORD:-changeme}@postgres:5432/oblidesk
+      SESSION_SECRET: ${SESSION_SECRET:-change-this-in-production}
+      CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost}
+      APP_NAME: ${APP_NAME:-Oblidesk}
+      DEFAULT_ADMIN_USERNAME: ${DEFAULT_ADMIN_USERNAME:-admin}
+      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-admin123}
+      # AES key for mailbox / outbound-integration credentials at rest.
+      # Generate once: openssl rand -hex 32   (losing it makes stored secrets unreadable)
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+    volumes:
+      # Attachment blob store - survives image updates.
+      # Layout: /custom/attachments/<tenant_id>/<yyyy>/<mm>/<sha256[0:2]>/<sha256>
+      - ${CUSTOM_DIR:-./custom}:/custom
+
+  client:
+    image: meejay/oblidesk-client:${OBLIDESK_VERSION:-latest}
+    restart: unless-stopped
+    depends_on:
+      server:
+        condition: service_healthy
+    ports:
+      - "${LISTEN_PORT:-3004}:80"
+
+volumes:
+  postgres_data:

@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Oblidesk</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- Obli Design System section 11 - two-tier stack: Inter (body) / Rajdhani (display) / JetBrains Mono (IDs, counts, timestamps) -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Rajdhani:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <script>
+      // FOUC prevention: apply the saved theme before React boots so a saved
+      // light theme never flashes dark on reload. Mirrors client/src/utils/theme.ts
+      // (localStorage key: 'og-theme' - shared across the whole Obli* suite so a
+      // theme picked in Obligate carries over here).
+      try {
+        var t = localStorage.getItem('og-theme');
+        if (t === 'obli-operator' || t === 'obli-daylight' || t === 'modern' || t === 'neon') {
+          document.documentElement.dataset.theme = t;
+        } else {
+          document.documentElement.dataset.theme = 'obli-operator';
+        }
+      } catch (e) {
+        document.documentElement.dataset.theme = 'obli-operator';
+      }
+    </script>
+    <style>
+      /* Paint the page background before Tailwind lands - avoids a white flash
+         when arriving from another Obli* app. Values mirror --c-bg-primary. */
+      html, body { margin: 0; background: #0b0d1a; }
+      [data-theme='modern'] body { background: #0d1117; }
+      [data-theme='neon'] body { background: #07080a; }
+      [data-theme='obli-daylight'] body { background: #e5e9f0; }
+    </style>
+  </head>
+  <body class="bg-bg-primary text-text-primary">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

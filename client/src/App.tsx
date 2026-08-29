@@ -1,0 +1,450 @@
+/**
+ * App.tsx — the route table.
+ *
+ * Shape, top to bottom:
+ *
+ *   /login /forgot-password /reset-password     public, no chrome
+ *   /enroll /sso-enroll                         signed in, still no chrome —
+ *                                               a 2FA wizard with a sidebar is a
+ *                                               wizard you can wander out of
+ *   everything else                             inside <AppLayout />
+ *   *                                           NotFoundPage
+ *
+ * Two decisions worth reading before editing:
+ *
+ * **The ticket queue is ONE route.** `/tickets` and `/tickets/:id` are the same
+ * `<Route path="/tickets/:id?">`, not two routes rendering the same component.
+ * A single route element means React keeps `TicketsPage` mounted while the id
+ * changes, so opening a ticket does not tear down and re-virtualise the queue
+ * behind it — the scroll position, the loaded window and the socket
+ * subscriptions all survive. Splitting this into two `<Route>`s is a regression
+ * even though it looks identical.
+ *
+ * **Placeholders are honest.** Every module that is planned but not built yet
+ * routes to `<ComingSoon>`, which names the module and the phase it lands in.
+ * There are no stub pages on disk pretending to be features: a real file called
+ * `ReportsPage.tsx` that renders "no data" is indistinguishable from a broken
+ * report, and someone eventually ships it.
+ */
+
+import { Suspense, lazy, useEffect, type ReactNode } from 'react';
+import { BrowserRouter, Link, Navigate, Route, Routes, useParams } from 'react-router-dom';
+import { Toaster } from 'react-hot-toast';
+import { useTranslation } from 'react-i18next';
+import { ArrowRight, Construction, LayoutGrid } from 'lucide-react';
+import { CAPABILITIES } from '@oblidesk/shared';
+import { useAuthStore } from '@/store/authStore';
+import { ProtectedRoute } from '@/components/layout/ProtectedRoute';
+import { AppLayout } from '@/components/layout/AppLayout';
+import { Badge } from '@/components/common/Badge';
+import { Button } from '@/components/common/Button';
+import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+
+// The sign-in surfaces stay in the entry chunk: they are the first paint of a
+// cold visit, and a spinner in front of the login form buys nothing.
+import { LoginPage } from '@/pages/LoginPage';
+import { ForgotPasswordPage } from '@/pages/ForgotPasswordPage';
+import { ResetPasswordPage } from '@/pages/ResetPasswordPage';
+import { NotFoundPage } from '@/pages/NotFoundPage';
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Lazy chunks
+//
+// Everything an agent reaches AFTER signing in. The ticket surfaces pull in
+// @tanstack/react-virtual, @dnd-kit and recharts; the admin pages pull their own
+// tables and modals. Keeping them out of the entry chunk is what makes the login
+// screen appear immediately on a slow link.
+//
+// The `.then()` mapping is deliberate: every page in this app exports a NAMED
+// component (`export function TicketsPage`), and naming it here means a typo in
+// the import path or a renamed export fails at build time rather than resolving
+// to `undefined` and blanking the route at runtime.
+// ═════════════════════════════════════════════════════════════════════════════
+
+const ShiftBoardPage = lazy(() =>
+  import('@/pages/ShiftBoardPage').then((m) => ({ default: m.ShiftBoardPage })),
+);
+const TicketsPage = lazy(() =>
+  import('@/pages/TicketsPage').then((m) => ({ default: m.TicketsPage })),
+);
+const SetupPage = lazy(() => import('@/pages/SetupPage').then((m) => ({ default: m.SetupPage })));
+const ProfilePage = lazy(() =>
+  import('@/pages/ProfilePage').then((m) => ({ default: m.ProfilePage })),
+);
+const EnrollmentPage = lazy(() =>
+  import('@/pages/EnrollmentPage').then((m) => ({ default: m.EnrollmentPage })),
+);
+const SsoEnrollPage = lazy(() =>
+  import('@/pages/SsoEnrollPage').then((m) => ({ default: m.SsoEnrollPage })),
+);
+const SettingsPage = lazy(() =>
+  import('@/pages/SettingsPage').then((m) => ({ default: m.SettingsPage })),
+);
+const AdminUsersPage = lazy(() =>
+  import('@/pages/AdminUsersPage').then((m) => ({ default: m.AdminUsersPage })),
+);
+const AdminTeamsPage = lazy(() =>
+  import('@/pages/AdminTeamsPage').then((m) => ({ default: m.AdminTeamsPage })),
+);
+const AdminTenantsPage = lazy(() =>
+  import('@/pages/AdminTenantsPage').then((m) => ({ default: m.AdminTenantsPage })),
+);
+const AdminPermissionSetsPage = lazy(() =>
+  import('@/pages/AdminPermissionSetsPage').then((m) => ({ default: m.AdminPermissionSetsPage })),
+);
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Suspense
+// ═════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Wraps ONE route element rather than the whole `<Routes>` tree, so a chunk that
+ * is still downloading suspends the content pane only. Hoisting the boundary
+ * above `<AppLayout />` would blank the topbar, the sidebar and the queue rail
+ * every time an agent opens the settings page — chrome that flickers reads as
+ * a crash.
+ */
+function Page({ children }: { children: ReactNode }) {
+  return <Suspense fallback={<PageLoader />}>{children}</Suspense>;
+}
+
+function PageLoader() {
+  const { t } = useTranslation();
+  return (
+    <div className="flex min-h-[60vh] items-center justify-center">
+      <LoadingSpinner size="lg" label={t('common.loading', 'Chargement…')} />
+    </div>
+  );
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Planned modules
+//
+// The roadmap, as data. Each entry becomes a route that renders <ComingSoon>.
+// `label` is the inline French fallback demanded by HARD RULE 10 — the module
+// name must read as French even if the translation bundle never loads.
+//
+// Phases:
+//   2 — the records that sit next to a ticket (assets, problems, changes)
+//   3 — self-service and the shape of a ticket (knowledge, catalog, fields,
+//       forms, the configuration studio)
+//   4 — the engines (automation, SLA policies, workflows, rules, channels)
+//   5 — the people and the money (on-call, team, time, contracts)
+//   6 — reading it all back (dashboards, reports, config portability)
+// ═════════════════════════════════════════════════════════════════════════════
+
+interface PlannedModule {
+  path: string;
+  labelKey: string;
+  /** Inline French fallback — HARD RULE 10. */
+  label: string;
+  phase: number;
+}
+
+const PLANNED_MODULES: readonly PlannedModule[] = [
+  { path: '/assets', labelKey: 'nav.assets', label: 'Actifs', phase: 2 },
+  { path: '/problems', labelKey: 'nav.problems', label: 'Problèmes', phase: 2 },
+  { path: '/changes', labelKey: 'nav.changes', label: 'Changements', phase: 2 },
+  { path: '/knowledge', labelKey: 'nav.knowledge', label: 'Base de connaissances', phase: 3 },
+  { path: '/catalog', labelKey: 'nav.catalog', label: 'Catalogue de services', phase: 3 },
+  { path: '/automation', labelKey: 'nav.automation', label: 'Automatisation', phase: 4 },
+  { path: '/sla', labelKey: 'nav.sla', label: 'SLA', phase: 4 },
+  { path: '/oncall', labelKey: 'nav.oncall', label: 'Astreinte', phase: 5 },
+  { path: '/team', labelKey: 'nav.team', label: 'Équipe', phase: 5 },
+  { path: '/time', labelKey: 'nav.time', label: 'Temps', phase: 5 },
+  { path: '/contracts', labelKey: 'nav.contracts', label: 'Contrats', phase: 5 },
+  { path: '/dashboards', labelKey: 'nav.dashboards', label: 'Tableaux de bord', phase: 6 },
+  { path: '/reports', labelKey: 'nav.reports', label: 'Rapports', phase: 6 },
+];
+
+const PLANNED_ADMIN_MODULES: readonly PlannedModule[] = [
+  { path: '/admin/config', labelKey: 'nav.admin.config', label: 'Configuration', phase: 3 },
+  { path: '/admin/fields', labelKey: 'nav.admin.fields', label: 'Champs', phase: 3 },
+  { path: '/admin/forms', labelKey: 'nav.admin.forms', label: 'Formulaires', phase: 3 },
+  { path: '/admin/workflows', labelKey: 'nav.admin.workflows', label: 'Workflows', phase: 4 },
+  { path: '/admin/rules', labelKey: 'nav.admin.rules', label: 'Règles', phase: 4 },
+  {
+    path: '/admin/channels',
+    labelKey: 'nav.admin.channels',
+    label: 'Canaux de notification',
+    phase: 4,
+  },
+  {
+    path: '/admin/import-export',
+    labelKey: 'nav.admin.importExport',
+    label: 'Import / Export',
+    phase: 6,
+  },
+];
+
+/**
+ * Paths the shipped chrome already links to, mapped onto the canonical route.
+ *
+ * `Sidebar.tsx` and `CommandPalette.tsx` were written against an earlier path
+ * scheme (`/ci`, `/kb`, `/grid`, `/admin/sla`…). Rather than let those links dead-end
+ * on the 404 page, each one redirects to the route that owns the module now.
+ * Delete a row here the day its source link is rewritten — an alias with no
+ * caller is just a second name for the same page.
+ */
+const ALIASES: readonly (readonly [from: string, to: string])[] = [
+  ['/ci', '/assets'],
+  ['/kb', '/knowledge'],
+  ['/grid', '/tickets'],
+  ['/admin/automation', '/automation'],
+  ['/admin/sla', '/sla'],
+  ['/admin/contracts', '/contracts'],
+  ['/settings', '/admin/settings'],
+];
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ComingSoon
+// ═════════════════════════════════════════════════════════════════════════════
+
+/**
+ * The placeholder for a planned module.
+ *
+ * It says three things and nothing more: which module this is, which build
+ * phase ships it, and where the work actually is right now. No fake widgets, no
+ * "0" counters, no sample rows — an empty dashboard is read as a broken
+ * dashboard, and a placeholder that lies is worse than a placeholder.
+ */
+function ComingSoon({ labelKey, label, phase }: Omit<PlannedModule, 'path'>) {
+  const { t } = useTranslation();
+  const module = t(labelKey, label);
+
+  return (
+    <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 p-8 text-center">
+      <div className="flex h-12 w-12 items-center justify-center rounded-card bg-bg-tertiary text-text-muted">
+        <Construction size={22} />
+      </div>
+
+      <div className="max-w-md space-y-2">
+        <h1 className="font-display text-2xl font-semibold tracking-wide text-text-primary">
+          {t('comingSoon.title', '{{module}} arrive bientôt', { module })}
+        </h1>
+        {/* "Phase 4" reads identically in French and English, so the placeholder
+            names its phase without inventing a key the reference bundle does
+            not carry. */}
+        <div className="flex justify-center">
+          <Badge tone="accent" size="sm" mono>
+            {t('comingSoon.phase', 'Phase {{phase}}', { phase })}
+          </Badge>
+        </div>
+        <p className="text-[13px] leading-relaxed text-text-muted">
+          {t(
+            'comingSoon.body',
+            "Ce module est en cours de construction. Le reste de l'application fonctionne normalement.",
+          )}
+        </p>
+      </div>
+
+      <div className="mt-1 flex items-center gap-2">
+        <Link to="/tickets">
+          <Button variant="primary" trailing={<ArrowRight size={15} />}>
+            {t('nav.tickets', 'Tickets')}
+          </Button>
+        </Link>
+        <Link to="/">
+          <Button variant="ghost" icon={<LayoutGrid size={15} />}>
+            {t('comingSoon.back', 'Retour au tableau de garde')}
+          </Button>
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * `/queues/:slug` (the sidebar's queue rail) is the ticket queue pre-filtered,
+ * not a page of its own — the filter belongs in the URL so the link is
+ * shareable and the queue stays one component.
+ */
+function QueueRedirect() {
+  const { slug } = useParams<{ slug: string }>();
+  return <Navigate to={`/tickets?queue=${encodeURIComponent(slug ?? '')}`} replace />;
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// App
+// ═════════════════════════════════════════════════════════════════════════════
+
+export default function App() {
+  const { checkSession } = useAuthStore();
+
+  // One session probe per boot. `ProtectedRoute` waits on `isInitialized`, so a
+  // refresh deep inside the app never bounces a signed-in agent to /login.
+  useEffect(() => {
+    void checkSession();
+  }, [checkSession]);
+
+  return (
+    <BrowserRouter>
+      <Routes>
+        {/* ── Public ────────────────────────────────────────────────────── */}
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+        <Route path="/reset-password" element={<ResetPasswordPage />} />
+
+        {/* ── Signed in ─────────────────────────────────────────────────── */}
+        <Route element={<ProtectedRoute />}>
+          {/* Full-screen wizards: deliberately OUTSIDE the layout. Both exist to
+              be finished, and a sidebar is an invitation to leave. */}
+          <Route
+            path="/enroll"
+            element={
+              <Page>
+                <EnrollmentPage />
+              </Page>
+            }
+          />
+          <Route
+            path="/sso-enroll"
+            element={
+              <Page>
+                <SsoEnrollPage />
+              </Page>
+            }
+          />
+
+          <Route element={<AppLayout />}>
+            {/* ── Work ──────────────────────────────────────────────────── */}
+            <Route
+              path="/"
+              element={
+                <Page>
+                  <ShiftBoardPage />
+                </Page>
+              }
+            />
+            {/* One route, optional id — see the note at the top of the file. */}
+            <Route
+              path="/tickets/:id?"
+              element={
+                <Page>
+                  <TicketsPage />
+                </Page>
+              }
+            />
+            {/* The same queue in kanban. TicketsPage keys the layout off the
+                pathname, so no prop crosses the route boundary. */}
+            <Route
+              path="/board"
+              element={
+                <Page>
+                  <TicketsPage />
+                </Page>
+              }
+            />
+            <Route path="/queues/:slug" element={<QueueRedirect />} />
+
+            {/* ── Personal ──────────────────────────────────────────────── */}
+            <Route
+              path="/profile"
+              element={
+                <Page>
+                  <ProfilePage />
+                </Page>
+              }
+            />
+            <Route
+              path="/setup"
+              element={
+                <Page>
+                  <SetupPage />
+                </Page>
+              }
+            />
+
+            {/* ── Planned modules ───────────────────────────────────────── */}
+            {PLANNED_MODULES.map(({ path, labelKey, label, phase }) => (
+              <Route
+                key={path}
+                path={path}
+                element={<ComingSoon labelKey={labelKey} label={label} phase={phase} />}
+              />
+            ))}
+
+            {/* ── Administration ────────────────────────────────────────── */}
+            <Route element={<ProtectedRoute requiredCapability={CAPABILITIES.CONFIG_ADMIN} />}>
+              <Route
+                path="/admin/users"
+                element={
+                  <Page>
+                    <AdminUsersPage />
+                  </Page>
+                }
+              />
+              <Route
+                path="/admin/teams"
+                element={
+                  <Page>
+                    <AdminTeamsPage />
+                  </Page>
+                }
+              />
+              <Route
+                path="/admin/permission-sets"
+                element={
+                  <Page>
+                    <AdminPermissionSetsPage />
+                  </Page>
+                }
+              />
+              <Route
+                path="/admin/settings"
+                element={
+                  <Page>
+                    <SettingsPage />
+                  </Page>
+                }
+              />
+
+              {PLANNED_ADMIN_MODULES.map(({ path, labelKey, label, phase }) => (
+                <Route
+                  key={path}
+                  path={path}
+                  element={<ComingSoon labelKey={labelKey} label={label} phase={phase} />}
+                />
+              ))}
+            </Route>
+
+            {/* Tenants are the installation's partitioning, not this tenant's
+                configuration — a `config_admin` inside one tenant must not be
+                able to mint another. Role, not capability, on purpose. */}
+            <Route element={<ProtectedRoute requiredRole="admin" />}>
+              <Route
+                path="/admin/tenants"
+                element={
+                  <Page>
+                    <AdminTenantsPage />
+                  </Page>
+                }
+              />
+            </Route>
+
+            {/* ── Aliases for the chrome's older paths ──────────────────── */}
+            {ALIASES.map(([from, to]) => (
+              <Route key={from} path={from} element={<Navigate to={to} replace />} />
+            ))}
+          </Route>
+        </Route>
+
+        {/* ── 404, always last ──────────────────────────────────────────── */}
+        <Route path="*" element={<NotFoundPage />} />
+      </Routes>
+
+      {/* HARD RULE 11 — no border on a surface. The suite's shared toast style
+          carries `!border` to override react-hot-toast's own inline styling;
+          the colour is transparent so the rule holds and depth comes from the
+          background step plus the card shadow. */}
+      <Toaster
+        position="top-right"
+        toastOptions={{
+          className:
+            '!bg-bg-secondary !text-text-primary !border !border-transparent !rounded-card !shadow-card',
+          duration: 4000,
+        }}
+      />
+    </BrowserRouter>
+  );
+}
