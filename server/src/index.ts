@@ -245,6 +245,12 @@ async function main(): Promise<void> {
     logger.info('Seed complete');
   }
 
+  // ── 2b. Demonstration data ───────────────────────────────────────────────
+  // Reconciles the demo tenant with DEMO_DATA. Runs after the seeds so the
+  // baseline config exists, and before anything serves traffic. Never throws.
+  const { demoDataService } = await import('./services/demoData.service');
+  await demoDataService.reconcile();
+
   // ── 3. Blob store (HARD RULE 9) ──────────────────────────────────────────
   // Fail soft: a read-only /custom must not stop the desk from serving
   // tickets, but the operator needs to know before the first upload fails.

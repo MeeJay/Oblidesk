@@ -52,6 +52,8 @@ import auditRoutes from './audit.routes';
 import ticketsRoutes from './tickets.routes';
 import journalRoutes from './journal.routes';
 import attachmentsRoutes from './attachments.routes';
+import ciRoutes from './ci.routes';
+import ciLiveRoutes from './ciLive.routes';
 import configObjectsRoutes from './configObjects.routes';
 import viewsRoutes from './views.routes';
 import dashboardRoutes from './dashboard.routes';
@@ -145,6 +147,8 @@ tenantRouter.use('/audit', auditRoutes);
 tenantRouter.use('/tickets', ticketsRoutes);
 tenantRouter.use('/journal', journalRoutes);
 tenantRouter.use('/attachments', attachmentsRoutes);
+tenantRouter.use('/ci', ciRoutes);
+tenantRouter.use('/ci', ciLiveRoutes); // /ci/:id/live/:app — the read-through half
 
 // The clock and the engines that act on it. All four are ordinary tenant
 // routers: their handlers read `req.tenantId` and never name a tenant.

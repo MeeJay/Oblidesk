@@ -86,6 +86,7 @@ import { useAuthStore } from '@/store/authStore';
 import { useTenantStore } from '@/store/tenantStore';
 import { setLanguage } from '@/i18n';
 import { applyTheme, currentTheme, type AppTheme } from '@/utils/theme';
+import { Toggle } from '@/components/common/Toggle';
 import { cn } from '@/utils/cn';
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -358,52 +359,6 @@ function HomeLink({ step }: { step: Step }) {
       <span className="truncate font-medium text-accent">{t(home.key, home.label)}</span>
       <ExternalLink size={11} className="shrink-0 text-text-muted" />
     </Link>
-  );
-}
-
-function Toggle({
-  checked,
-  onChange,
-  label,
-  hint,
-  disabled,
-}: {
-  checked: boolean;
-  onChange: (next: boolean) => void;
-  label: string;
-  hint?: string;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      disabled={disabled}
-      onClick={() => onChange(!checked)}
-      className={cn(
-        'flex w-full items-center justify-between gap-4 rounded-card bg-bg-tertiary px-3 py-2.5 text-left transition-colors',
-        'hover:bg-bg-hover disabled:cursor-not-allowed disabled:opacity-50',
-      )}
-    >
-      <span className="min-w-0">
-        <span className="block text-[13px] text-text-primary">{label}</span>
-        {hint && <span className="mt-0.5 block text-[11px] leading-snug text-text-muted">{hint}</span>}
-      </span>
-      <span
-        className={cn(
-          'relative h-5 w-9 shrink-0 rounded-pill transition-colors',
-          checked ? 'bg-accent' : 'bg-bg-primary',
-        )}
-      >
-        <span
-          className={cn(
-            'absolute top-0.5 h-4 w-4 rounded-full transition-all',
-            checked ? 'left-[18px] bg-bg-primary' : 'left-0.5 bg-text-muted',
-          )}
-        />
-      </span>
-    </button>
   );
 }
 
@@ -1519,6 +1474,7 @@ export function SetupPage() {
               </div>
 
               <Toggle
+                labelFirst
                 checked={portalEnabled}
                 onChange={(next) => {
                   setPortalEnabled(next);
@@ -1526,7 +1482,7 @@ export function SetupPage() {
                 }}
                 disabled={!isAdmin}
                 label={t('setup.portalEnabled', 'Ouvrir le portail demandeur')}
-                hint={t(
+                description={t(
                   'setup.portalEnabledHint',
                   'Les demandeurs voient leurs propres tickets et peuvent répondre, sans accès au bureau.',
                 )}
@@ -1669,10 +1625,11 @@ export function SetupPage() {
               </div>
 
               <Toggle
+                labelFirst
                 checked={queueIsDefault}
                 onChange={setQueueIsDefault}
                 label={t('setup.queueDefault', 'File par défaut')}
-                hint={t(
+                description={t(
                   'setup.queueDefaultHint',
                   'Tout ticket sans file explicite arrive ici. L’ancienne file par défaut est rétrogradée dans la foulée.',
                 )}
@@ -1886,6 +1843,7 @@ export function SetupPage() {
               </div>
 
               <Toggle
+                labelFirst
                 checked={stripQuoted}
                 onChange={(next) => {
                   setStripQuoted(next);
@@ -1893,7 +1851,7 @@ export function SetupPage() {
                 }}
                 disabled={!canConfig}
                 label={t('setup.stripQuoted', "Couper l'historique cité des réponses")}
-                hint={t(
+                description={t(
                   'setup.stripQuotedHint',
                   'Sans cela, chaque réponse recopie tout le fil dans le journal et le rend illisible au bout de trois échanges.',
                 )}

@@ -19,6 +19,7 @@ export * from './capabilities';
 export * from './calendar';
 export * from './conditions';
 export * from './themes';
+export * from './demoFixtures';
 
 // ── Config body shapes (depends on conditions, statusCategories, calendar) ──
 export * from './configKinds';

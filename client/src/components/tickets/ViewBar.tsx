@@ -350,8 +350,18 @@ export default function ViewBar({
 
   return (
     <div className={clsx('flex flex-col gap-2 bg-bg-primary px-3 pb-2 pt-2.5', className)}>
-      {/* ── The view strip ───────────────────────────────────────────────── */}
-      <div className="flex items-center gap-2">
+      {/* ── The view strip ─────────────────────────────────────────────────
+          The views get a row to THEMSELVES, and the sort/group/refresh
+          controls get the next one.
+
+          They used to share one row. Once the strip started wrapping instead of
+          scrolling, that meant the views wrapped to three short lines while the
+          controls sat pinned to the right of the second one, so the whole
+          header looked stacked and the views never got the width they needed.
+          Giving the strip the full width is what stops it wrapping in the first
+          place; on a narrow window it still wraps, but into two full lines
+          rather than three ragged ones. */}
+      <div className="flex flex-wrap items-center gap-1">
         {/*
           Wrap, do not scroll.
 
@@ -440,6 +450,11 @@ export default function ViewBar({
             </span>
           )}
         </div>
+      </div>
+
+      {/* ── Controls: sort, grouping, refresh ─────────────────────────────
+          Their own row, so the view strip above keeps the full width. */}
+      <div className="flex flex-wrap items-center gap-2">
 
         {/* ── Sort ───────────────────────────────────────────────────────── */}
         <label className="flex shrink-0 items-center gap-1.5 rounded-pill bg-bg-tertiary py-1 pl-2.5 pr-1 text-[11px] text-text-muted">

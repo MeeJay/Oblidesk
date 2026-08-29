@@ -253,8 +253,15 @@ function RuleRow({
           <div className="mt-0.5 flex items-start gap-1.5 text-[11.5px] text-sla-warn">
             <AlertTriangle size={12} className="mt-0.5 shrink-0" />
             <span className="min-w-0">
+              {/*
+                The linter's message arrives from the server in English. Every
+                issue also carries a stable `code`, so translate on the code and
+                keep the server's sentence as the fallback: a new code the client
+                does not know yet still says something true instead of nothing.
+                HARD RULE 10 — the raw English string was reaching the screen.
+              */}
               {errors.length === 1
-                ? errors[0].message
+                ? t(`rules.lint.${errors[0].code}`, errors[0].message)
                 : t('rules.issueCount', '{{count}} problème(s) de configuration', { count: errors.length })}
             </span>
           </div>

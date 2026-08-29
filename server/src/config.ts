@@ -166,6 +166,16 @@ export const config = {
     str('CUSTOM_DIR', existsSync('/.dockerenv') ? '/custom' : path.join(process.cwd(), 'custom')),
   ),
 
+  // ── Demonstration data ────────────────────────────────────────────────────
+  /**
+   * Desired state, not an action: true means the demo tenant exists and is
+   * populated, false means it does not. Reconciled at every boot, so flipping
+   * the variable and restarting is the whole interface. Only ever touches the
+   * tenant this service created and marked; see demoData.service.ts.
+   */
+  demoData: bool('DEMO_DATA', false),
+  demoVolume: intInRange('DEMO_VOLUME', 60, 1, 500),
+
   // ── Background workers ────────────────────────────────────────────────────
   /** SLA sweep cadence. One minute is the contract the UI countdown assumes. */
   slaTickIntervalMs: int('SLA_TICK_INTERVAL_MS', 60_000),

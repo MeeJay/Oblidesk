@@ -104,6 +104,17 @@ const AutomationPage = lazy(() =>
 );
 const SlaPage = lazy(() => import('@/pages/SlaPage').then((m) => ({ default: m.SlaPage })));
 
+// The asset module. Two routes rather than one optional-param route, which is
+// the opposite of the ticket queue's choice above and deliberate: the asset
+// list is not virtualised and holds no scroll window worth preserving, so
+// remounting it costs one keyset page and nothing else.
+const AssetsPage = lazy(() =>
+  import('@/pages/AssetsPage').then((m) => ({ default: m.AssetsPage })),
+);
+const AssetDetailPage = lazy(() =>
+  import('@/pages/AssetDetailPage').then((m) => ({ default: m.AssetDetailPage })),
+);
+
 // ═════════════════════════════════════════════════════════════════════════════
 // Suspense
 // ═════════════════════════════════════════════════════════════════════════════
@@ -155,7 +166,6 @@ interface PlannedModule {
 }
 
 const PLANNED_MODULES: readonly PlannedModule[] = [
-  { path: '/assets', labelKey: 'nav.assets', label: 'Actifs', phase: 2 },
   { path: '/problems', labelKey: 'nav.problems', label: 'Problèmes', phase: 2 },
   { path: '/changes', labelKey: 'nav.changes', label: 'Changements', phase: 2 },
   { path: '/knowledge', labelKey: 'nav.knowledge', label: 'Base de connaissances', phase: 3 },
@@ -346,6 +356,26 @@ export default function App() {
               }
             />
             <Route path="/queues/:slug" element={<QueueRedirect />} />
+
+            {/* ── Assets ────────────────────────────────────────────────── */}
+            <Route element={<ProtectedRoute requiredCapability={CAPABILITIES.CI_READ} />}>
+              <Route
+                path="/assets"
+                element={
+                  <Page>
+                    <AssetsPage />
+                  </Page>
+                }
+              />
+              <Route
+                path="/assets/:id"
+                element={
+                  <Page>
+                    <AssetDetailPage />
+                  </Page>
+                }
+              />
+            </Route>
 
             {/* ── Personal ──────────────────────────────────────────────── */}
             <Route
