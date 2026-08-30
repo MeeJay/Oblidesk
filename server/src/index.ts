@@ -35,6 +35,7 @@ import { obligateService } from './services/obligate.service';
 import { outboxService } from './services/outbox.service';
 import { rollupService } from './services/rollup.service';
 import * as problemDetectionService from './services/problemDetection.service';
+import * as changeConflictService from './services/changeConflict.service';
 import * as portalService from './services/portal.service';
 
 /** Expired magic-link tokens are litter after a day; sweep them hourly. */
@@ -398,6 +399,37 @@ async function main(): Promise<void> {
         stop: () => problemDetectionService.stopSweeper(),
       },
       'Problem detector',
+      workers,
+    );
+
+    // The change conflict sweeper: the ONLY thing that notices that two changes
+    // booked the same switch for Thursday night, or that a freeze came into
+    // force over a window somebody scheduled last month. The planning path
+    // answers for whichever change is open on somebody's screen; without this
+    // pass, every OTHER change's panel is frozen at whatever it said the last
+    // time a human touched it — and a conflict panel that is only correct for
+    // the change you are looking at is a conflict panel nobody can trust.
+    //
+    // ONE TICK, TWO JOBS: the same pass also stamps overdue
+    // post-implementation reviews and arms their escalation ladder. Both are
+    // five-minute questions over the same table, and an eighth worker for the
+    // second one would buy nothing.
+    //
+    // EVERY TENANT IS SWEPT, including one that never published a
+    // `change_policy` — it runs on the shipped baseline, stamped version 0. A
+    // sweeper whose tenant selection requires a config object is a sweeper that
+    // runs empty for the life of the install, which is exactly the defect the
+    // problem module shipped and had to have found for it.
+    //
+    // Under the leader lock like every other sweep: two replicas would race
+    // each other into `change_conflicts_live_uq` on every pass, and both would
+    // stamp `pir_overdue_notified_at` while only one of them sent the notice.
+    await startWorker(
+      {
+        start: () => changeConflictService.startSweeper(),
+        stop: () => changeConflictService.stopSweeper(),
+      },
+      'Change conflict sweeper',
       workers,
     );
 

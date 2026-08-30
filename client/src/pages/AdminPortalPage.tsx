@@ -356,8 +356,14 @@ export function AdminPortalPage() {
   const grantReading = useCallback(
     async (contact: PortalContactRecord) => {
       try {
+        // Name the organisation the confirmation just showed, rather than
+        // letting the server fall back to whatever the row holds now. The list
+        // was loaded a moment ago; if someone moved this contact to another
+        // customer in between, an unqualified grant would hand them THAT
+        // company's history while the dialog said a different name.
         const record = await portalContactsApi.setVisibility(contact.id, {
           orgVisibility: 'organization',
+          organizationId: contact.organizationId,
         });
         adopt(record);
         setGranting(null);
@@ -1188,13 +1194,23 @@ function useOrganizationOptions(
  * tidier and then silently accepts "acme.example, acme.fr" as a single value
  * with a space in it, which matches no sender and looks like a working rule.
  */
-function parseDomains(raw: string): string[] {
+function parseDomains(raw: string): { domains: string[]; invalid: string[] } {
   const seen = new Set<string>();
+  const invalid: string[] = [];
   for (const line of raw.split(/[\s,;]+/)) {
     const value = line.trim().toLowerCase().replace(/^@+/, '');
-    if (value !== '') seen.add(value);
+    if (value === '') continue;
+    // The same shape the server's `domainSchema` demands: labels, dots, and a
+    // TLD. Judging it here is not duplication for its own sake — the server's
+    // field errors were being swallowed by the generic toast, so typing "acme"
+    // produced a failed save with no explanation and nothing kept.
+    if (/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(value)) {
+      seen.add(value);
+    } else if (!invalid.includes(value)) {
+      invalid.push(value);
+    }
   }
-  return [...seen];
+  return { domains: [...seen], invalid };
 }
 
 function OrganizationEditor({
@@ -1228,6 +1244,15 @@ function OrganizationEditor({
     setSlugError(null);
     try {
       const parsed = parseDomains(domains);
+      if (parsed.invalid.length > 0) {
+        setSaving(false);
+        toast.error(
+          t('portalAdmin.orgDomainsInvalid', 'Not a domain: {{list}}', {
+            list: parsed.invalid.join(', '),
+          }),
+        );
+        return;
+      }
       const record = editing
         ? await organizationsApi.update(org.id, {
             name: name.trim(),
@@ -1235,13 +1260,13 @@ function OrganizationEditor({
             // but leaving it out keeps a rename out of the audit trail unless
             // somebody really renamed it.
             ...(slugChanged ? { slug: slug.trim() } : {}),
-            domains: parsed,
+            domains: parsed.domains,
             externalRef: externalRef.trim() || null,
           })
         : await organizationsApi.create({
             name: name.trim(),
             ...(slug.trim() ? { slug: slug.trim() } : {}),
-            domains: parsed,
+            domains: parsed.domains,
             externalRef: externalRef.trim() || null,
           });
 

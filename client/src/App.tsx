@@ -137,6 +137,19 @@ const ProblemDetailPage = lazy(() =>
   import('@/pages/ProblemDetailPage').then((m) => ({ default: m.ProblemDetailPage })),
 );
 
+// The change module, split on the same line and for the same reason: the board
+// carries a timeline nobody keeps open for an hour, while the folder carries the
+// four shared gate evaluators, the conflict panel and the review. Neither
+// belongs in the entry chunk, and neither imports the other — the "raise a
+// change" modal lives with the board that owns the button, so opening the
+// calendar does not download the folder.
+const ChangesPage = lazy(() =>
+  import('@/pages/ChangesPage').then((m) => ({ default: m.ChangesPage })),
+);
+const ChangeDetailPage = lazy(() =>
+  import('@/pages/ChangeDetailPage').then((m) => ({ default: m.ChangeDetailPage })),
+);
+
 // The agent's side of the portal: the customer directory (organisations,
 // contacts, and who among them may read a whole company's tickets).
 const AdminPortalPage = lazy(() =>
@@ -212,7 +225,9 @@ function PageLoader() {
 // name must read as French even if the translation bundle never loads.
 //
 // Phases:
-//   2 — the records that sit next to a ticket (assets, problems, changes)
+//   2 — the records that sit next to a ticket. Complete: assets, problems and
+//       changes have all shipped and route to their own pages below, so this
+//       phase no longer appears in the table.
 //   3 — self-service and the shape of a ticket (knowledge, catalog, fields,
 //       forms, the configuration studio)
 //   4 — the engines (workflows, rules, channels — automation and SLA have
@@ -231,7 +246,6 @@ interface PlannedModule {
 }
 
 const PLANNED_MODULES: readonly PlannedModule[] = [
-  { path: '/changes', labelKey: 'nav.changes', label: 'Changements', phase: 2 },
   { path: '/knowledge', labelKey: 'nav.knowledge', label: 'Base de connaissances', phase: 3 },
   { path: '/catalog', labelKey: 'nav.catalog', label: 'Catalogue de services', phase: 3 },
   { path: '/oncall', labelKey: 'nav.oncall', label: 'Astreinte', phase: 5 },
@@ -538,6 +552,34 @@ export default function App() {
                 element={
                   <Page>
                     <ProblemDetailPage />
+                  </Page>
+                }
+              />
+            </Route>
+
+            {/* ── Changes ───────────────────────────────────────────────── */}
+            {/* Gated on TICKET_READ, the same capability the server demands to
+                read one — reading a change rides on reading its ticket, and no
+                `change_read` capability exists on purpose. Writing is
+                CHANGE_RW, scheduling is CHANGE_SCHEDULE and bypassing a freeze
+                is CHANGE_FREEZE_OVERRIDE; all three are checked per action by
+                the shared evaluators, not per route, so an agent who may read
+                the calendar still sees it with the buttons greyed and the
+                reason spelled out. */}
+            <Route element={<ProtectedRoute requiredCapability={CAPABILITIES.TICKET_READ} />}>
+              <Route
+                path="/changes"
+                element={
+                  <Page>
+                    <ChangesPage />
+                  </Page>
+                }
+              />
+              <Route
+                path="/changes/:id"
+                element={
+                  <Page>
+                    <ChangeDetailPage />
                   </Page>
                 }
               />

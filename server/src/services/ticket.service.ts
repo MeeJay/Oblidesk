@@ -354,6 +354,32 @@ function approvalEngine(): ApprovalEngine | null {
  * ticket.service's transition hook" — it never was, so the automatic cascade
  * and the known-error retirement were dead code behind a manual button.
  */
+/**
+ * The change engine, reached the same lazy way as the problem engine and for
+ * the same reason: `change.service` imports THIS module to create and
+ * transition its ticket, so a static import would close the cycle.
+ *
+ * Wired here because it was not. Three functions in that file each carried a
+ * header saying "WHERE THIS IS WIRED: ticket.service.transition()", and none of
+ * them had a caller — the same defect the problem module shipped, in a module
+ * written after it and warned about it. A comment describing a call site is not
+ * a call site.
+ */
+type ChangeEngineModule = typeof import('./change.service');
+
+let changeModule: ChangeEngineModule | null | undefined;
+
+function changeEngine(): ChangeEngineModule | null {
+  if (changeModule === undefined) {
+    try {
+      changeModule = require('./change.service') as ChangeEngineModule;
+    } catch {
+      changeModule = null;
+    }
+  }
+  return changeModule;
+}
+
 type ProblemEngineModule = typeof import('./problem.service');
 
 let problemModule: ProblemEngineModule | null | undefined;
@@ -2269,6 +2295,27 @@ export async function transition(
         decision.toCategory,
         tx,
       );
+
+      // A change carries gates an approval definition cannot express: its
+      // backout plan, its planned window, a freeze it falls inside, a conflict
+      // somebody has to acknowledge. Refused HERE rather than in the change
+      // routes, because the transition is reachable from the rules engine, a
+      // macro and the bulk bar as well — gating only the module's own screen
+      // would leave three doors open.
+      //
+      // Skipped for `system: true` on the same grounds as the approval gate
+      // above: a merge or an alert recovery is a fact arriving from elsewhere.
+      // `toCategory` is null on a transition the machine leaves categoryless;
+      // there is no change gate to apply to a move that lands nowhere.
+      if (decision.toCategory !== null) {
+        await changeEngine()?.assertTransitionAllowed(
+          tenantId,
+          ticketId,
+          decision.toCategory,
+          tx,
+          actor,
+        );
+      }
     }
 
     return withDecision(
@@ -2459,6 +2506,24 @@ export async function transition(
         // transaction, so the cascade and the transition that caused it commit
         // or roll back together, and `runHook` keeps a cascade failure from
         // taking the transition down with it.
+        // The change's own terminal work: freezing the implementation window
+        // it actually ran in, and arming the post-implementation review an
+        // emergency change owes. Same transaction as the transition that
+        // caused it, same `runHook` isolation.
+        await runHook('change.onResolved', tenantId, ticketId, () =>
+          changeEngine()?.onChangeResolved({
+            tenantId,
+            ticket: {
+              id: ticketId,
+              recordType: ticket.recordType,
+              statusCategory: ticket.statusCategory,
+            },
+            previous: { statusCategory: beforeTicket.statusCategory },
+            actor,
+            trx: tx,
+          }),
+        );
+
         await runHook('problem.onResolved', tenantId, ticketId, () =>
           problemEngine()?.onProblemResolved({
             tenantId,

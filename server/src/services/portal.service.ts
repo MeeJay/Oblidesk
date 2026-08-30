@@ -1034,6 +1034,38 @@ export interface PortalReplyResult {
  * starts a FRESH SLA clock rather than resuming the spent one), and the rules
  * engine is told, so a "customer responded" rule can fire.
  */
+/**
+ * Prove the requester may WRITE on this ticket, not merely read it.
+ *
+ * `org_visibility` is a reading right and says so everywhere it is defined:
+ * migration 009 ("what this contact may READ"), the column comment, the admin
+ * screen. Writing was nonetheless authorised by `getTicket`, the READ
+ * predicate, so a customer-side manager granted organisation reading could post
+ * a public reply on any colleague's ticket. That reply carries their name into
+ * a conversation they were given permission to watch, and because a requester
+ * reply REOPENS a resolved ticket, it also moves somebody else's work back into
+ * the queue.
+ *
+ * A wider read must never quietly widen the write. If replying on behalf of a
+ * whole company is wanted later, it is a second right with its own grant and
+ * its own audit line, not a side effect of the first.
+ *
+ * Answered from `mine`, which `getTicket` already computes, so there is no
+ * second query and no second definition of "whose ticket is this".
+ */
+async function assertMayWrite(
+  principal: PortalPrincipal,
+  ticketId: number,
+): Promise<PortalTicketDetail> {
+  const detail = await getTicket(principal, ticketId);
+  if (!detail.mine) {
+    throw new AppError(403, 'You can read this ticket but only its requester can add to it', {
+      code: 'forbidden',
+    });
+  }
+  return detail;
+}
+
 export async function reply(
   principal: PortalPrincipal,
   ticketId: number,
@@ -1043,9 +1075,9 @@ export async function reply(
   if (body === '') throw new AppError(400, 'A reply cannot be empty');
   if (body.length > 100_000) throw new AppError(413, 'That reply is too long');
 
-  // Proves visibility before anything is written, using the same predicate the
-  // reads use.
-  const detail = await getTicket(principal, ticketId);
+  // Proves the WRITE right before anything is written. Visibility alone is not
+  // it: see assertMayWrite.
+  const detail = await assertMayWrite(principal, ticketId);
 
   const attachmentIds = [...new Set(input.attachmentIds ?? [])].filter((id) =>
     Number.isInteger(id) && id > 0,
@@ -1207,13 +1239,22 @@ export async function uploadAttachment(
   if (!(await attachmentsAllowed(principal.tenantId))) {
     throw new AppError(403, 'This portal does not accept file uploads');
   }
-  await getTicket(principal, ticketId);
+  // Attaching is writing: the file lands on the ticket and shows in its
+  // timeline. Reading the ticket is not enough.
+  await assertMayWrite(principal, ticketId);
 
   const result = await attachmentService.uploadAttachment({
     tenantId: principal.tenantId,
     uploadedBy: null,
     file,
-    link: { entityType: 'ticket', entityId: ticketId },
+    link: {
+      entityType: 'ticket',
+      entityId: ticketId,
+      // "Who sent us this?" now has an answer on the one surface where the
+      // sender is not an employee. `uploadedBy` above stays null on purpose:
+      // that column names a `users` row and a requester has none.
+      linkedByContactId: principal.contactId,
+    },
     // A requester has no business uploading an executable, and unlike inbound
     // mail there is no evidentiary reason to keep one.
     rejectExecutables: true,
@@ -1968,8 +2009,17 @@ export async function reassignOrganizationContacts(
     await loadOrganizationRow(tenantId, fromOrganizationId, trx, { lock: true });
     if (targetOrganizationId !== null) await loadOrganizationRow(tenantId, targetOrganizationId, trx);
 
+    // The CONTACT rows are locked too, not just their organisation. Locking the
+    // parent serialises two admins emptying the same org, but it does nothing
+    // about a concurrent `setContactVisibility` grant, which touches a contact
+    // without ever looking at the organisation. Without this lock such a grant
+    // could land between the count and the UPDATE below: the update revokes it
+    // — correctly — while `visibilityRevoked` and therefore the audit row say
+    // it never existed. A ledger that under-reports what it took away is worse
+    // than no ledger, because it is believed.
     const affected = (await scoped('portal_contacts', tenantId, trx)
       .where('portal_contacts.organization_id', fromOrganizationId)
+      .forUpdate()
       .select('portal_contacts.id', 'portal_contacts.org_visibility')) as Array<{
       id: number;
       org_visibility: string;

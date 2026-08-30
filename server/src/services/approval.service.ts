@@ -2428,6 +2428,33 @@ export async function decide(input: DecideInput): Promise<DecideResult> {
           await runOutcomeActions(tenantId, ticket, snapshot, after.state, trx);
         }
 
+        // A change latches the window it was approved FOR the moment its last
+        // approval settles: approving on Tuesday for Saturday and then quietly
+        // moving the window to Sunday is the oldest trick in change management,
+        // and the baseline is what makes it visible afterwards.
+        //
+        // Lazily required for the same reason ticket.service reaches its
+        // engines that way: change.service imports this module. Failure is
+        // swallowed — an approval decision must stand even if the change module
+        // is unavailable, and `onApprovalDecided` is documented never to throw.
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
+          const changeEngine = require('./change.service') as typeof import('./change.service');
+          await changeEngine.onApprovalDecided({
+            tenantId,
+            ticketId: Number(approvalRow.ticket_id),
+            recordType: ticket.recordType,
+            state: after.state,
+            actor: null,
+            trx: trx as Knex.Transaction,
+          });
+        } catch (err) {
+          logger.warn(
+            { err, tenantId, approvalId },
+            'approval: change hook failed — the decision stands',
+          );
+        }
+
         recorder
           .decide(
             `approval "${snapshot.definitionSlug}" step ${Number(target.step_index) + 1} on ${ticket.number} ` +

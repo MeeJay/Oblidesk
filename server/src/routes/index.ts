@@ -53,6 +53,7 @@ import settingsRoutes from './settings.routes';
 import auditRoutes from './audit.routes';
 import ticketsRoutes from './tickets.routes';
 import problemsRoutes from './problems.routes';
+import changesRoutes from './changes.routes';
 import journalRoutes from './journal.routes';
 import attachmentsRoutes from './attachments.routes';
 import ciRoutes from './ci.routes';
@@ -170,6 +171,21 @@ tenantRouter.use('/tickets', ticketsRoutes);
 // collection-level, and nesting them would have made every URL carry a ticket
 // id that the route had no use for.
 tenantRouter.use('/problems', problemsRoutes);
+
+// Change management: the planned window, the risk band, the CAB, the conflict
+// scan, the freeze calendars, the implementation record and the review. Mounted
+// beside `/tickets` for the same reason `/problems` is — a change IS a ticket,
+// so `/changes/:ticketId` is a ticket id, but `/changes/schedule`,
+// `/changes/models` and `/changes/from-model` are collection-level and nesting
+// them under `/tickets/:id` would have made every URL carry an id the route had
+// no use for.
+//
+// The status transition into `scheduled` or `closed` is NOT guarded in that
+// router. It is guarded in `ticket.service.transition`, which every path —
+// this module, the rules engine, a bulk action, an alert recovery — goes
+// through. A gate that only holds for callers who came in the front door is
+// not a gate.
+tenantRouter.use('/changes', changesRoutes);
 
 tenantRouter.use('/journal', journalRoutes);
 tenantRouter.use('/attachments', attachmentsRoutes);

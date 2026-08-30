@@ -53,6 +53,46 @@ export const CAPABILITIES = {
    * with the rules, macros and escalation ladders.
    */
   PROBLEM_RW: 'problem_rw',
+  /**
+   * Raise a change, write its implementation / backout / test plans, start its
+   * implementation, record its outcome and complete its post-implementation
+   * review.
+   *
+   * WHY THERE IS NO MATCHING `change_read`: reading changes and the forward
+   * schedule rides on `ticket_read`, exactly as problems do, so every existing
+   * permission set keeps the change calendar on the day this ships instead of
+   * silently losing it. A change nobody may look at is a change that gets
+   * scheduled on top of.
+   *
+   * Editing the `change_policy` / `change_model` / `change_freeze` objects is
+   * NOT here: those are automation definitions and they stay under
+   * `automation_admin` with the rules, macros, escalation ladders and approval
+   * definitions. `config_admin` is fields, forms, views and the state machine.
+   */
+  CHANGE_RW: 'change_rw',
+  /**
+   * Commit a change to a window, and acknowledge a conflict that would
+   * otherwise refuse that commitment.
+   *
+   * SEPARATE FROM `change_rw` for the reason `problem_rw` is separate from
+   * `ticket_rw`: the sharp edge must not ride on the everyday key. Writing a
+   * backout plan is everyday work; deciding to schedule a database migration
+   * on top of somebody else's maintenance window, in writing, is not. This is
+   * the change manager's key, not every agent's.
+   */
+  CHANGE_SCHEDULE: 'change_schedule',
+  /**
+   * Bypass a change-freeze window that would refuse the move.
+   *
+   * The sharpest edge in the module and the one an auditor asks about first,
+   * so it is its own key rather than a corner of `change_schedule`. It leaves
+   * four traces in one transaction: the columns on `changes`, a `decision_log`
+   * row naming the freeze slug AND its version, an `audit_log` row (the
+   * hash-chained one, because "and nobody edited that answer" is a different
+   * question from "why"), and a work note on the ticket so a human reading the
+   * ticket top to bottom sees it without ever opening the Why drawer.
+   */
+  CHANGE_FREEZE_OVERRIDE: 'change_freeze_override',
   /** Read published knowledge-base articles. */
   KB_READ: 'kb_read',
   /** Draft and edit knowledge-base articles. */
@@ -183,6 +223,43 @@ export const CAPABILITY_CATALOG: readonly CapabilityCatalogEntry[] = [
     implies: [CAPABILITIES.TICKET_RW],
     // Sensitive because the closure cascade resolves other people's tickets in
     // bulk, and because a published known error is read by the whole desk.
+    sensitive: true,
+  },
+  {
+    key: CAPABILITIES.CHANGE_RW,
+    label: 'Work changes',
+    labelKey: 'capability.changeRw',
+    description:
+      'Raise a change, write its implementation, backout and test plans, start and finish its implementation, record its outcome and complete its review.',
+    group: 'tickets',
+    sortOrder: 6,
+    implies: [CAPABILITIES.TICKET_RW],
+    // Not sensitive: writing a plan is everyday work. The two sharp edges of
+    // this module have their own keys below.
+    sensitive: false,
+  },
+  {
+    key: CAPABILITIES.CHANGE_SCHEDULE,
+    label: 'Schedule changes',
+    labelKey: 'capability.changeSchedule',
+    description:
+      'Commit a change to a maintenance window and acknowledge a scheduling conflict, in writing, when going ahead anyway.',
+    group: 'tickets',
+    sortOrder: 7,
+    implies: [CAPABILITIES.CHANGE_RW],
+    // Acknowledging a high-severity conflict is a named person putting their
+    // name to an overlap on a critical CI. That belongs behind a confirm.
+    sensitive: true,
+  },
+  {
+    key: CAPABILITIES.CHANGE_FREEZE_OVERRIDE,
+    label: 'Override change freezes',
+    labelKey: 'capability.changeFreezeOverride',
+    description:
+      'Schedule a change inside a freeze window. Records the freeze it bypassed, by slug and version, with a mandatory reason.',
+    group: 'tickets',
+    sortOrder: 8,
+    implies: [CAPABILITIES.CHANGE_SCHEDULE],
     sensitive: true,
   },
 
@@ -565,6 +642,9 @@ export const CAPABILITY_PRESETS: readonly {
       CAPABILITIES.TICKET_ASSIGN,
       CAPABILITIES.TICKET_DELETE,
       CAPABILITIES.PROBLEM_RW,
+      // Plans and outcomes, but not the window: committing a change to a
+      // maintenance slot is the change manager's call, not the shift lead's.
+      CAPABILITIES.CHANGE_RW,
       CAPABILITIES.KB_RW,
       CAPABILITIES.TIME_RW,
       CAPABILITIES.CI_RW,
@@ -582,6 +662,10 @@ export const CAPABILITY_PRESETS: readonly {
       CAPABILITIES.TICKET_ASSIGN,
       CAPABILITIES.TICKET_DELETE,
       CAPABILITIES.PROBLEM_RW,
+      // CHANGE_SCHEDULE implies CHANGE_RW. The freeze override is deliberately
+      // NOT here: a service manager who needs it can be granted it, and a key
+      // that arrives with the job title is a key nobody notices being used.
+      CAPABILITIES.CHANGE_SCHEDULE,
       CAPABILITIES.QUEUE_ADMIN,
       CAPABILITIES.SLA_ADMIN,
       CAPABILITIES.AUTOMATION_ADMIN,

@@ -31,6 +31,18 @@ export * from './configKinds';
 // dragging the whole DTO surface behind them.
 export * from './problem';
 
+// ── Change management (depends on capabilities, statusCategories, configKinds)
+// Placed BEFORE ./types for exactly the reason ./problem is: it is a leaf of
+// the DTO graph. It declares its own slim `ChangeTicketHeader` rather than
+// importing `Ticket`, so the four shared gates (HARD RULE 12) stay importable
+// from the client without dragging the whole DTO surface behind them.
+//
+// The change VOCABULARY that the three config bodies are typed through —
+// `CHANGE_TYPES`, `CHANGE_RISKS`, `FAILURE_LIKELIHOODS`, `CHANGE_GATE_MODES`,
+// `CHANGE_PIR_REQUIREMENTS` — is declared in ./configKinds and re-exported by
+// the star export above, because ./configKinds may not import this module.
+export * from './change';
+
 // ── DTOs and wire types (depends on everything above) ───────────────────────
 // NOTE: `ApprovalMode` is declared once, in ./configKinds, and re-exported by
 // ./types — so this star export is unambiguous. If you add a symbol to

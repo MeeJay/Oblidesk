@@ -156,6 +156,23 @@ export const TENANT_SCOPED_TABLES = [
   'problem_alert_signatures',
   'problem_candidates',
   'problem_candidate_tickets',
+
+  // ── 011 change management ─────────────────────────────────────────────
+  // `changes` is 1:1 with a `record_type = 'change'` ticket but is NOT
+  // PARENT_SCOPED: the conflict sweeper and the PIR sweeper both read it by
+  // tenant, ordered by a window or a due date, without joining `tickets` at
+  // all — and a sweeper that has to join to find out whose row it is holding
+  // is a sweeper that will one day forget to.
+  //
+  // `change_conflicts` carries its own tenant_id for the same reason
+  // `escalation_fires` does in 004: the panel and the sweeper read it by
+  // (tenant, severity) and by (tenant, change), and a child reachable only
+  // through its parent is the one shape PARENT_SCOPED_TABLES is for. It is
+  // also a CACHE (safe to truncate and rebuild), which makes a stamped tenant
+  // on every row the cheapest possible guarantee that a rebuild cannot smear
+  // one tenant's conflicts onto another's board.
+  'changes',
+  'change_conflicts',
 ] as const;
 
 export type TenantScopedTable = (typeof TENANT_SCOPED_TABLES)[number];

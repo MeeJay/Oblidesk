@@ -55,6 +55,37 @@ export const CONFIG_KINDS = [
    * migration.
    */
   'problem_detection',
+  /**
+   * Change management, in three objects rather than one, because the three
+   * answer three different questions and a tenant edits them on three
+   * different days:
+   *
+   *   change_policy  WHICH controls apply to WHICH change: the risk matrix,
+   *                  the per-band approval slugs, the gate modes, the PIR
+   *                  requirement and the lead time. It does SELECTION only —
+   *                  the CAB itself is an ordinary `approval` object run by
+   *                  the existing approval engine. Nothing about approval
+   *                  mechanics is rebuilt here.
+   *   change_model   a pre-approved recipe for a `standard` change. Its plans
+   *                  are COPIED into the change at creation, never referenced:
+   *                  the model gets edited next year, and the plan the CAB
+   *                  blessed must stay readable exactly as it was executed.
+   *   change_freeze  a period during which changes are refused, expressed by
+   *                  INVERTING a `calendar` (see ChangeFreezeBody).
+   *
+   * They live here rather than in `settings` for the reason
+   * `problem_detection` does: `settings` has no format version, no slug, no
+   * diff and no export, and `decision_log.rule_slug` + `rule_version`
+   * (HARD RULES 3 and 4) must be able to name the published object that
+   * decided — a change blocked by a configuration nobody can retrieve as it
+   * stood is a change nobody can explain.
+   *
+   * `config_objects.kind` is an unconstrained varchar(32), so all three cost
+   * no migration.
+   */
+  'change_policy',
+  'change_model',
+  'change_freeze',
 ] as const;
 
 export type ConfigKind = (typeof CONFIG_KINDS)[number];
@@ -81,6 +112,9 @@ export const CONFIG_BODY_FORMAT_VERSIONS: Readonly<Record<ConfigKind, number>> =
   escalation: 1,
   approval: 1,
   problem_detection: 1,
+  change_policy: 1,
+  change_model: 1,
+  change_freeze: 1,
 };
 
 export const CONFIG_KIND_LABELS: Readonly<Record<ConfigKind, { key: string; fallback: string }>> = {
@@ -101,6 +135,9 @@ export const CONFIG_KIND_LABELS: Readonly<Record<ConfigKind, { key: string; fall
   escalation: { key: 'config.kind.escalation', fallback: 'Escalation' },
   approval: { key: 'config.kind.approval', fallback: 'Approval' },
   problem_detection: { key: 'config.kind.problemDetection', fallback: 'Problem detection' },
+  change_policy: { key: 'config.kind.changePolicy', fallback: 'Change policy' },
+  change_model: { key: 'config.kind.changeModel', fallback: 'Change model' },
+  change_freeze: { key: 'config.kind.changeFreeze', fallback: 'Change freeze' },
 };
 
 export function isConfigKind(value: unknown): value is ConfigKind {
@@ -128,6 +165,21 @@ export type UrgencyLevel = 'high' | 'medium' | 'low';
 
 export const IMPACT_LEVELS: readonly ImpactLevel[] = ['high', 'medium', 'low'];
 export const URGENCY_LEVELS: readonly UrgencyLevel[] = ['high', 'medium', 'low'];
+
+/**
+ * The SECOND axis of change risk, alongside `ImpactLevel`. It lives here beside
+ * impact and urgency for the same reason they do: it is body vocabulary read by
+ * a config object (`ChangePolicyBody.riskMatrix`) as well as a column
+ * (`changes.failure_likelihood`), and one home means one spelling.
+ *
+ * Impact alone cannot separate "restart a mail server" from "restart a mail
+ * server with a script we have never run", and that distinction is exactly what
+ * risk is supposed to express. Urgency is deliberately NOT reused: urgency is
+ * how fast the requester needs it, which says nothing about how likely the work
+ * is to go wrong.
+ */
+export type FailureLikelihood = 'high' | 'medium' | 'low';
+export const FAILURE_LIKELIHOODS: readonly FailureLikelihood[] = ['high', 'medium', 'low'];
 
 /** Who a configuration surface is meant for. */
 export type ConfigAudience = 'agent' | 'portal' | 'both';
@@ -905,6 +957,249 @@ export interface ProblemDetectionBody {
   defaultPrioritySlug: string | null;
 }
 
+// ── Change management: shared vocabulary ─────────────────────────────────────
+//
+// These tuples are body vocabulary AND column vocabulary: each one mirrors a
+// CHECK in migration 011. They live here rather than in ./change because the
+// three change bodies below are typed through them and ./change imports this
+// module, never the reverse.
+
+/**
+ * `changes.change_type`. The slug is `emergency`, not `urgent`, even though the
+ * French label is "urgente": `tickets.urgency` already exists with
+ * high|medium|low, and a row carrying `change_type = 'urgent'` next to
+ * `urgency = 'high'` is a naming trap in every query, every report and every
+ * condition tree a tenant writes. Labels are i18n; slugs are forever.
+ *
+ * The type is not a chip colour. It switches exactly four engine behaviours —
+ * approval selection, the conflict gate, the freeze gate, the PIR requirement —
+ * and nothing else in the module keys on it.
+ */
+export const CHANGE_TYPES = ['standard', 'normal', 'emergency'] as const;
+export type ChangeType = (typeof CHANGE_TYPES)[number];
+
+/** `changes.risk` and `changes.risk_computed`. The output of the matrix. */
+export const CHANGE_RISKS = ['high', 'medium', 'low'] as const;
+export type ChangeRisk = (typeof CHANGE_RISKS)[number];
+
+/** The 3x3 lookup key of `ChangePolicyBody.riskMatrix`: `impact:likelihood`. */
+export type ChangeRiskMatrixKey = `${ImpactLevel}:${FailureLikelihood}`;
+
+/**
+ * How hard a control bites.
+ *
+ *   block  the shared evaluator refuses the move and the server refuses it too
+ *   warn   the panel says so, the move proceeds
+ *   off    not evaluated at all
+ *
+ * `warn` is not weakness: a control people route around is not a control, and a
+ * hard block on every band is how teams end up scheduling outside the tool —
+ * which destroys the calendar the conflict detector reads, i.e. its own input.
+ */
+export const CHANGE_GATE_MODES = ['block', 'warn', 'off'] as const;
+export type ChangeGateMode = (typeof CHANGE_GATE_MODES)[number];
+
+/** When a band owes a post-implementation review. */
+export const CHANGE_PIR_REQUIREMENTS = ['always', 'on_failure', 'never'] as const;
+export type ChangePirRequirement = (typeof CHANGE_PIR_REQUIREMENTS)[number];
+
+// ── kind: change_policy ──────────────────────────────────────────────────────
+
+/** What one risk band demands. Every cross-reference is a SLUG (HARD RULE 3). */
+export interface ChangeRiskBandSpec {
+  /**
+   * The `approval` objects a change in this band must obtain. The CAB is one of
+   * these; it is an ordinary approval definition run by the existing engine.
+   *
+   * An approval named here MUST carry no `requiredWhen` of its own. The
+   * selection has already decided, and a definition that ALSO carries a
+   * condition is started twice — once by this policy, once by the transition
+   * hook that runs `startRequiredApprovals` on every non-terminal move. Two
+   * pending approvals, two inboxes, one change. The config linter refuses it.
+   */
+  approvalSlugs: string[];
+  conflictGate: ChangeGateMode;
+  freezeGate: ChangeGateMode;
+  pirRequired: ChangePirRequirement;
+  /** Business minutes a change in this band must be scheduled ahead by. */
+  leadTimeMinutes: number;
+  /** Calendar the lead time and the PIR due date are measured on (by SLUG). */
+  calendarSlug?: string | null;
+  /** Business minutes after the outcome is recorded before the PIR is due. */
+  pirDueBusinessMinutes: number;
+  /** Business minutes overdue before `pirEscalationSlug` is started. */
+  pirEscalateAfterBusinessMinutes?: number;
+}
+
+/** Per-type overrides. Anything omitted falls through to the risk band. */
+export interface ChangeTypeSpec {
+  /**
+   * `standard` only. A standard change may not be authored freehand: it must
+   * name a `change_model`. That single requirement is the only thing that makes
+   * "pre-approved" safe, because 'standard' without a model is just 'normal
+   * with the controls turned off'.
+   */
+  requireModel?: boolean;
+  /** Union the resolved band's `approvalSlugs` on top of this type's own. */
+  inheritFromRiskBand?: boolean;
+  approvalSlugs?: string[];
+  conflictGate?: ChangeGateMode;
+  freezeGate?: ChangeGateMode;
+  pirRequired?: ChangePirRequirement;
+  leadTimeMinutes?: number;
+}
+
+/** Extra approvals earned by the change's context, never removed by it. */
+export interface ChangeApprovalAddition {
+  addApprovalSlugs: string[];
+}
+
+export interface ChangePolicyBody {
+  /** Exhaustive 3x3. A missing cell would silently become the safest guess. */
+  riskMatrix: Readonly<Record<ChangeRiskMatrixKey, ChangeRisk>>;
+  riskBands: Readonly<Record<ChangeRisk, ChangeRiskBandSpec>>;
+  byType: Readonly<Record<ChangeType, ChangeTypeSpec>>;
+
+  /**
+   * Keyed by the worst `cis.criticality` among the CIs linked as primary or
+   * affected. The four values are the hard-coded CMDB enum, so this is fully
+   * lintable.
+   */
+  byCiCriticality?: Partial<
+    Record<'critical' | 'high' | 'medium' | 'low', ChangeApprovalAddition>
+  >;
+  /**
+   * Keyed by queue SLUG. Deliberately by queue and not by assignment group:
+   * assignment groups are ROWS, not config objects, `assignment_group` is not a
+   * ConfigKind and CONFIG_KIND_REFERENCES cannot express it — the same reason
+   * the queue baseline's `default_assignment_group` is excluded from the
+   * linter. A tenant who genuinely needs a per-service owner writes an
+   * `approval` whose approvers include a `field` approver; that is reuse of an
+   * existing facility, not a new one.
+   */
+  byQueue?: Record<string, ChangeApprovalAddition>;
+
+  conflictDetection: {
+    enabled: boolean;
+    /** How far ahead the sweeper re-scans planned windows. */
+    lookaheadDays: number;
+    /** Above this many overlapping changes on one queue, raise a saturation row. */
+    maxConcurrentPerQueue: number;
+    /** Off by default: capacity is a different signal from a real conflict. */
+    queueSaturationEnabled: boolean;
+  };
+
+  /**
+   * How far the planned window may move after the baseline is frozen before
+   * the granted approvals are invalidated and re-selected. An approval is
+   * consent to a SPECIFIC window; silently carrying it onto another one is
+   * consent nobody gave.
+   */
+  windowMoveToleranceMinutes: number;
+  /** Ladder started when a PIR stays overdue (HARD RULE 3 — a slug). */
+  escalationSlug?: string | null;
+  /** Fallback calendar for lead time and PIR due dates (by SLUG). */
+  calendarSlug?: string | null;
+}
+
+// ── kind: change_model ───────────────────────────────────────────────────────
+
+/**
+ * A pre-approved recipe. Its plans are COPIED into the change at creation and
+ * never referenced: the model will be edited next year and the plan the CAB
+ * blessed must stay readable exactly as it was executed. Same argument that
+ * gave `problem_analyses` its superseded rows.
+ */
+export interface ChangeModelBody {
+  /** Every change created from this model is this type. Normally 'standard'. */
+  changeType: ChangeType;
+  /** Copied verbatim into `changes.implementation_md` at creation. */
+  implementationMd: string;
+  /** Copied verbatim into `changes.backout_md`. */
+  backoutMd?: string | null;
+  /** Copied verbatim into `changes.test_md`. */
+  testMd?: string | null;
+  /** Seeds `tickets.impact` and `changes.failure_likelihood`. */
+  impact?: ImpactLevel | null;
+  failureLikelihood?: FailureLikelihood | null;
+  /** Typical duration, used to pre-fill the planned window in the picker. */
+  defaultDurationMinutes?: number;
+  /** HARD RULE 3 — all by slug. */
+  formSlug?: string | null;
+  queueSlug?: string | null;
+  prioritySlug?: string | null;
+  /** Approvals this model always demands, on top of whatever the policy picks. */
+  approvalSlugs?: string[];
+  calendarSlug?: string | null;
+  isActive: boolean;
+}
+
+// ── kind: change_freeze ──────────────────────────────────────────────────────
+
+/**
+ * A period during which changes are refused, expressed by INVERTING a
+ * `calendar`.
+ *
+ * THE INVERSION IS THE WHOLE TRICK, and it is why freezes cost almost nothing.
+ * A `calendar` already models weekly shifts, holidays, exception days and a
+ * timezone; `calendarService.calendarBands()` already splits a range into
+ * open/shut bands and is already tested. A freeze calendar is authored with the
+ * FREEZE PERIODS AS THE OPEN SHIFTS, and then:
+ *
+ *     frozen  ⇔  calendarBands(freezeCalendar, plannedStart, plannedEnd)
+ *                contains any band with open === true
+ *
+ * One line, one existing function, no second date engine. `open === true` means
+ * FROZEN here and open-for-business everywhere else in the product, so the
+ * config editor says so in prose above the picker and this comment says it in
+ * code. The alternative — a `change_freeze_periods` table with a start and an
+ * end — survives about a month, until somebody asks for "every Friday after
+ * 16:00" and "the 24th to the 2nd, every year", at which point recurrence has
+ * been rebuilt badly. The calendar already has recurrence, holidays, exceptions
+ * and a timezone, the tenant already knows its editor, and the config bundle
+ * already exports it.
+ *
+ * A freeze has NO clock, NO pause, NO breach, NO target and NO ledger. It
+ * answers one boolean per change per evaluation. The day somebody asks for
+ * "business minutes remaining in the freeze", the answer is that this is an
+ * `sla` object and a different question.
+ */
+export interface ChangeFreezeBody {
+  enabled: boolean;
+  /**
+   * The calendar whose OPEN bands are the frozen periods (HARD RULE 3).
+   * Required: a freeze naming no calendar freezes nothing, and the linter says
+   * so rather than letting it sit there looking like a control.
+   */
+  calendarSlug: string;
+  /** Narrow the freeze to some changes. Evaluated by the caller, not here. */
+  appliesWhen?: ConditionNode | null;
+  /**
+   * Types this freeze never applies to. Shipping `['emergency']` is the honest
+   * default: a freeze that stops a 03:00 outage fix gets the fix done off-book
+   * and ticketed never. Note that `['standard','emergency']` sounds equally
+   * reasonable and quietly means the freeze catches ONLY normal changes — which
+   * may well be right, but it must be SAID, so the editor renders the
+   * exclusions in prose.
+   */
+  exemptTypes?: ChangeType[];
+  /** Bands this freeze applies to. Empty catches NOTHING; the linter warns. */
+  appliesToRiskBands?: ChangeRisk[];
+  /** `block` refuses the move; `warn` lets it through and says so. */
+  severity: 'block' | 'warn';
+  /**
+   * When set, overriding this freeze is not a click: it starts that `approval`
+   * and the block stands until it is granted (HARD RULE 3). That is how a
+   * tenant makes a freeze genuinely hard without making it impossible.
+   */
+  overrideApprovalSlug?: string | null;
+  label?: string;
+  labelKey?: string;
+  /** Shown to whoever is refused. `t(reasonKey, reason)` — HARD RULE 10. */
+  reason?: string;
+  reasonKey?: string;
+}
+
 // ── Kind → body map ──────────────────────────────────────────────────────────
 
 /**
@@ -929,6 +1224,9 @@ export interface ConfigBodyByKind {
   escalation: EscalationBody;
   approval: ApprovalBody;
   problem_detection: ProblemDetectionBody;
+  change_policy: ChangePolicyBody;
+  change_model: ChangeModelBody;
+  change_freeze: ChangeFreezeBody;
 }
 
 export type ConfigBodyFor<K extends ConfigKind> = ConfigBodyByKind[K];
@@ -980,4 +1278,12 @@ export const CONFIG_KIND_REFERENCES: Readonly<Record<ConfigKind, readonly Config
   // `defaultQueueSlug` names a queue; `defaultPrioritySlug` is a cell of the
   // priority matrix, which is the object that owns the priority vocabulary.
   problem_detection: ['queue', 'priority_matrix'],
+  // `approval` from every band's and every type's `approvalSlugs` plus the two
+  // addition maps; `calendar` from the band and the policy fallback; `queue`
+  // from the keys of `byQueue`; `escalation` from `escalationSlug`.
+  change_policy: ['approval', 'calendar', 'queue', 'escalation'],
+  change_model: ['form', 'queue', 'priority_matrix', 'approval', 'calendar'],
+  // `calendarSlug` is the INVERTED calendar whose open bands are the freeze;
+  // `overrideApprovalSlug` is what a would-be overrider must obtain.
+  change_freeze: ['calendar', 'approval'],
 };

@@ -9,9 +9,11 @@
  *
  * ── The one call that is not CRUD ───────────────────────────────────────────
  * `portalContactsApi.setVisibility` is the only call in the client that can
- * WIDEN a requester's reach. `'organization'` lets that person open — and reply
- * to — every ticket their organisation has ever filed on the portal, their
- * colleagues' included. Everything else here can only NARROW it, and two calls
+ * WIDEN a requester's reach. `'organization'` lets that person READ every
+ * ticket their organisation has ever filed on the portal, their colleagues'
+ * included. It does NOT let them write: replying and attaching stay with each
+ * ticket's own requester, because a wider read must not quietly widen the
+ * write (see `assertMayWrite` in portal.service.ts). Everything else here can only NARROW it, and two calls
  * narrow it as a side effect: `update()` with a changed `organizationId`, and
  * `organizationsApi.reassignContacts()`. The server revokes the right on both,
  * because it was granted against the organisation the contact is leaving.

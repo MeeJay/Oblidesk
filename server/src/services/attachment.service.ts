@@ -342,6 +342,17 @@ export interface AttachmentLinkTarget {
   entityId: number;
   /** Content-ID when the blob is an inline image in an HTML body. */
   inlineCid?: string | null;
+  /**
+   * Who attached it HERE. One side or the other, never both (migration 010).
+   *
+   * The attribution lives on the LINK and not on the blob because the blob is
+   * de-duplicated per tenant: `attachments.uploaded_by` names whoever uploaded
+   * those bytes first, anywhere, which is not what anybody is asking when they
+   * look at one ticket. The same file attached by an agent and by a customer is
+   * one blob and two links, each with its own author.
+   */
+  linkedByUserId?: number | null;
+  linkedByContactId?: number | null;
 }
 
 export interface UploadAttachmentInput {
@@ -474,6 +485,8 @@ export async function linkAttachment(
       entity_type: target.entityType,
       entity_id: target.entityId,
       inline_cid: target.inlineCid ?? null,
+      linked_by_user_id: target.linkedByUserId ?? null,
+      linked_by_contact_id: target.linkedByContactId ?? null,
     },
     executor,
   )
