@@ -166,6 +166,11 @@ router.get(
         email: principal.email,
         displayName: principal.displayName,
         organizationId: principal.organizationId,
+        // Without this the screen cannot know whether to offer the
+        // "my tickets / whole organisation" switch, so the right granted in
+        // migration 009 would be enforced by the server and invisible to the
+        // person who has it.
+        orgVisibility: principal.orgVisibility,
         locale: principal.locale,
         tenantSlug: principal.tenantSlug,
         canAttach: await portalService.attachmentsAllowed(principal.tenantId),

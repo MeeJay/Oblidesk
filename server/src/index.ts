@@ -35,6 +35,11 @@ import { obligateService } from './services/obligate.service';
 import { outboxService } from './services/outbox.service';
 import { rollupService } from './services/rollup.service';
 import * as problemDetectionService from './services/problemDetection.service';
+import * as portalService from './services/portal.service';
+
+/** Expired magic-link tokens are litter after a day; sweep them hourly. */
+const PORTAL_PRUNE_INTERVAL_MS = 3600_000;
+let portalPruneTimer: NodeJS.Timeout | null = null;
 import { slaTicker } from './services/sla.service';
 import { ruleScheduler } from './services/rule.service';
 import { escalationService } from './services/escalation.service';
@@ -349,6 +354,34 @@ async function main(): Promise<void> {
       'Rule scheduler',
       workers,
       { intervalMs: config.ruleScheduleIntervalMs },
+    );
+
+    // Portal magic-link housekeeping. Used and expired tokens are evidence for
+    // a day and litter afterwards, and `pruneTokens` was written to say so and
+    // then never called: the table grew for the life of the install, and the
+    // index behind every sign-in grew with it. Hourly is generous for a row
+    // that lives fifteen minutes.
+    await startWorker(
+      {
+        start: () => {
+          portalPruneTimer = setInterval(() => {
+            void portalService
+              .pruneTokens()
+              .then((deleted) => {
+                if (deleted > 0) logger.info({ deleted }, 'portal: expired login tokens pruned');
+              })
+              .catch((err: unknown) => logger.warn({ err }, 'portal: token prune failed'));
+          }, PORTAL_PRUNE_INTERVAL_MS);
+          portalPruneTimer.unref();
+        },
+        stop: () => {
+          if (portalPruneTimer) clearInterval(portalPruneTimer);
+          portalPruneTimer = null;
+        },
+      },
+      'Portal token prune',
+      workers,
+      { intervalMs: PORTAL_PRUNE_INTERVAL_MS },
     );
 
     // The recurrence detector: the ONLY thing that asks "do these incidents

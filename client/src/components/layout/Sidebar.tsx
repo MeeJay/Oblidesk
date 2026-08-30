@@ -16,6 +16,7 @@ import {
   ChevronsLeft,
   ChevronsRight,
   Clock4,
+  Contact,
   Inbox,
   LayoutDashboard,
   LayoutGrid,
@@ -34,6 +35,7 @@ import {
   Table2,
   Ticket,
   Users,
+  ShieldCheck,
   Workflow,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -462,10 +464,37 @@ export function Sidebar() {
         capability: CAPABILITIES.CONFIG_ADMIN,
       },
       {
+        // The portal had a complete API and no door. It sits next to Users
+        // because it answers the same question about the other half of the
+        // people in the system: Users is who may work the desk, this is who may
+        // read it from outside and how much of their own company they see.
+        //
+        // Guarded by the capability rather than `adminOnly`, because
+        // `portal_admin` is exactly what /api/organizations and
+        // /api/portal-admin demand on every route. A nav entry that leads to a
+        // 403 is worse than no entry at all.
+        labelKey: 'nav.portal',
+        label: 'Portail client',
+        path: '/admin/portal',
+        icon: <Contact size={17} />,
+        capability: CAPABILITIES.PORTAL_ADMIN,
+      },
+      {
         labelKey: 'nav.users',
         label: 'Utilisateurs',
         path: '/admin/users',
         icon: <Users size={17} />,
+        adminOnly: true,
+      },
+      {
+        // The page, its API and its 25-capability catalogue have all shipped;
+        // only the way in was missing, so the whole RBAC surface read as
+        // unbuilt. It sits next to Users because that is the question it
+        // answers: what may this person do.
+        labelKey: 'nav.permissionSets',
+        label: 'Jeux de permissions',
+        path: '/admin/permission-sets',
+        icon: <ShieldCheck size={17} />,
         adminOnly: true,
       },
       {

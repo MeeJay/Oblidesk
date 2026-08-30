@@ -4,13 +4,25 @@
  * Shape, top to bottom:
  *
  *   /login /forgot-password /reset-password     public, no chrome
+ *   /portal/*                                   the CUSTOMER portal — its own
+ *                                               guard, its own chrome, no agent
+ *                                               session anywhere near it
  *   /enroll /sso-enroll                         signed in, still no chrome —
  *                                               a 2FA wizard with a sidebar is a
  *                                               wizard you can wander out of
  *   everything else                             inside <AppLayout />
  *   *                                           NotFoundPage
  *
- * Two decisions worth reading before editing:
+ * Three decisions worth reading before editing:
+ *
+ * **The portal is a different application that happens to share a bundle.** It
+ * is not a section of the desk with fewer buttons. A portal contact has no
+ * `users` row and no membership, so `ProtectedRoute` (which waits on the agent
+ * session store) and `AppLayout` (sidebar, palette, tenant switcher) are both
+ * wrong for it in kind, not in degree. Its routes therefore sit ABOVE the
+ * signed-in tree and carry their own guard, `PortalGuard`, driven by the portal
+ * session. Moving them inside `ProtectedRoute` would bounce every customer to
+ * the agent login screen.
  *
  * **The ticket queue is ONE route.** `/tickets` and `/tickets/:id` are the same
  * `<Route path="/tickets/:id?">`, not two routes rendering the same component.
@@ -125,6 +137,49 @@ const ProblemDetailPage = lazy(() =>
   import('@/pages/ProblemDetailPage').then((m) => ({ default: m.ProblemDetailPage })),
 );
 
+// The agent's side of the portal: the customer directory (organisations,
+// contacts, and who among them may read a whole company's tickets).
+const AdminPortalPage = lazy(() =>
+  import('@/pages/AdminPortalPage').then((m) => ({ default: m.AdminPortalPage })),
+);
+
+// ═════════════════════════════════════════════════════════════════════════════
+// The customer portal
+//
+// A SEPARATE surface, not a section of the app. It renders outside `AppLayout`
+// and outside `ProtectedRoute` because it has neither of the two things those
+// depend on: a portal contact has no `users` row (`requireAuth` reads
+// `session.userId`, which a portal session never sets) and no membership
+// (`requireTenant` resolves a tenant from one; a requester's tenant is pinned
+// in the session by the magic-link token they burned). Its own guard is
+// `PortalGuard`, driven by `GET /api/portal/me`.
+//
+// Lazy for a reason the agent chunks do not share: the overwhelming majority of
+// visits to this build never touch the portal, and the overwhelming majority of
+// portal visits never touch the desk. Neither audience should download the
+// other's application.
+// ═════════════════════════════════════════════════════════════════════════════
+const PortalLayout = lazy(() =>
+  import('@/pages/portal/PortalLayout').then((m) => ({ default: m.PortalLayout })),
+);
+const PortalLoginPage = lazy(() =>
+  import('@/pages/portal/PortalLoginPage').then((m) => ({ default: m.PortalLoginPage })),
+);
+const PortalVerifyPage = lazy(() =>
+  import('@/pages/portal/PortalVerifyPage').then((m) => ({ default: m.PortalVerifyPage })),
+);
+const PortalTicketsPage = lazy(() =>
+  import('@/pages/portal/PortalTicketsPage').then((m) => ({ default: m.PortalTicketsPage })),
+);
+const PortalTicketDetailPage = lazy(() =>
+  import('@/pages/portal/PortalTicketDetailPage').then((m) => ({
+    default: m.PortalTicketDetailPage,
+  })),
+);
+const PortalNewTicketPage = lazy(() =>
+  import('@/pages/portal/PortalNewTicketPage').then((m) => ({ default: m.PortalNewTicketPage })),
+);
+
 // ═════════════════════════════════════════════════════════════════════════════
 // Suspense
 // ═════════════════════════════════════════════════════════════════════════════
@@ -218,7 +273,6 @@ const PLANNED_ADMIN_MODULES: readonly PlannedModule[] = [
 const ALIASES: readonly (readonly [from: string, to: string])[] = [
   ['/ci', '/assets'],
   ['/kb', '/knowledge'],
-  ['/grid', '/tickets'],
   ['/admin/automation', '/automation'],
   ['/admin/sla', '/sla'],
   ['/admin/contracts', '/contracts'],
@@ -314,6 +368,73 @@ export default function App() {
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
 
+        {/* ── Customer portal ───────────────────────────────────────────── */}
+        {/* Deliberately above the agent tree and outside both `ProtectedRoute`
+            and `AppLayout` — see the note by the lazy imports. The sign-in and
+            verify screens sit OUTSIDE `PortalLayout` as well: they are the two
+            pages that run without a session, and putting them inside the layout
+            would mean the layout's guard bouncing them straight back to
+            themselves. `/portal/verify` is the exact path the magic-link mail
+            builds (`${APP_URL}/portal/verify?token=…&next=…`); renaming it
+            silently invalidates every link already sitting in an inbox. */}
+        <Route
+          path="/portal/login"
+          element={
+            <Page>
+              <PortalLoginPage />
+            </Page>
+          }
+        />
+        <Route
+          path="/portal/verify"
+          element={
+            <Page>
+              <PortalVerifyPage />
+            </Page>
+          }
+        />
+        <Route
+          element={
+            <Page>
+              <PortalLayout />
+            </Page>
+          }
+        >
+          <Route
+            path="/portal"
+            element={
+              <Page>
+                <PortalTicketsPage />
+              </Page>
+            }
+          />
+          <Route
+            path="/portal/new"
+            element={
+              <Page>
+                <PortalNewTicketPage />
+              </Page>
+            }
+          />
+          <Route
+            path="/portal/tickets/:id"
+            element={
+              <Page>
+                <PortalTicketDetailPage />
+              </Page>
+            }
+          />
+        </Route>
+
+        {/* Any other `/portal/…` path goes back to the customer's own list.
+            Without this it would fall through to the shared 404, whose only
+            way out is `/` — which for a requester means the agent application,
+            a redirect to `/login`, and an identifier-and-password form they have
+            no account for. A mistyped URL must not read as being locked out of
+            your own supplier's support. Static segments outrank a splat in
+            React Router, so this never shadows the three routes above. */}
+        <Route path="/portal/*" element={<Navigate to="/portal" replace />} />
+
         {/* ── Signed in ─────────────────────────────────────────────────── */}
         <Route element={<ProtectedRoute />}>
           {/* Full-screen wizards: deliberately OUTSIDE the layout. Both exist to
@@ -358,6 +479,19 @@ export default function App() {
                 pathname, so no prop crosses the route boundary. */}
             <Route
               path="/board"
+              element={
+                <Page>
+                  <TicketsPage />
+                </Page>
+              }
+            />
+            {/* The same queue as a dense table. Like /board it keys the layout
+                off the pathname, so no state crosses the route boundary and
+                the loaded queue is re-rendered rather than refetched. It used
+                to be an alias onto /tickets, which quietly delivered the list
+                instead of the grid the sidebar promised. */}
+            <Route
+              path="/grid"
               element={
                 <Page>
                   <TicketsPage />
@@ -516,6 +650,25 @@ export default function App() {
                   element={<ComingSoon labelKey={labelKey} label={label} phase={phase} />}
                 />
               ))}
+            </Route>
+
+            {/* The customer directory: organisations, contacts, and the grant
+                that lets one contact read a whole company's tickets. Gated on
+                PORTAL_ADMIN — the same capability `/api/organizations` and
+                `/api/portal-admin` demand on every route, READS INCLUDED — and
+                not on CONFIG_ADMIN, so the route and the API agree about who
+                may open it. This directory carries a customer's mail domains
+                and its contact roster; a `config_admin` who was never given
+                portal_admin has no business reading it. */}
+            <Route element={<ProtectedRoute requiredCapability={CAPABILITIES.PORTAL_ADMIN} />}>
+              <Route
+                path="/admin/portal"
+                element={
+                  <Page>
+                    <AdminPortalPage />
+                  </Page>
+                }
+              />
             </Route>
 
             {/* Tenants are the installation's partitioning, not this tenant's

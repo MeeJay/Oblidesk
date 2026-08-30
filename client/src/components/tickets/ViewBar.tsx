@@ -39,6 +39,7 @@ import {
   Layers,
   LayoutGrid,
   Rows3,
+  Table2,
   RotateCw,
   Search,
   SlidersHorizontal,
@@ -191,6 +192,7 @@ export default function ViewBar({
   const location = useLocation();
   const navigate = useNavigate();
   const boardMode = location.pathname.startsWith('/board');
+  const gridMode = location.pathname.startsWith('/grid');
 
   const views = useViewStore(selectSidebarViews);
   const counts = useViewStore((state) => state.counts);
@@ -470,11 +472,13 @@ export default function ViewBar({
           <button
             type="button"
             onClick={() => navigate('/tickets')}
-            aria-pressed={!boardMode}
+            aria-pressed={!boardMode && !gridMode}
             title={t('views.layoutList', 'List')}
             className={clsx(
               'flex items-center gap-1 rounded-pill px-2 py-1 text-[11px] transition-colors',
-              !boardMode ? 'bg-bg-hover text-text-primary' : 'text-text-muted hover:text-text-secondary',
+              !boardMode && !gridMode
+                ? 'bg-bg-hover text-text-primary'
+                : 'text-text-muted hover:text-text-secondary',
             )}
           >
             <Rows3 size={13} aria-hidden />
@@ -492,6 +496,19 @@ export default function ViewBar({
           >
             <LayoutGrid size={13} aria-hidden />
             <span className="sr-only">{t('views.layoutBoard', 'Board')}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate('/grid')}
+            aria-pressed={gridMode}
+            title={t('views.layoutGrid', 'Grid')}
+            className={clsx(
+              'flex items-center gap-1 rounded-pill px-2 py-1 text-[11px] transition-colors',
+              gridMode ? 'bg-bg-hover text-text-primary' : 'text-text-muted hover:text-text-secondary',
+            )}
+          >
+            <Table2 size={13} aria-hidden />
+            <span className="sr-only">{t('views.layoutGrid', 'Grid')}</span>
           </button>
         </div>
 

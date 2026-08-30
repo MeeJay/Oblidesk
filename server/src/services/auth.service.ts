@@ -207,6 +207,16 @@ export const authService = {
     delete req.session.pendingMfaExpiresAt;
     delete req.session.pendingEmailOtpHash;
 
+    // A cookie carries ONE identity. `portal.service` states the invariant that
+    // an agent session and a requester session can never coexist, and it held
+    // in one direction only: signing in as an agent left `session.portal`
+    // untouched, so whoever last used that browser as a customer stayed signed
+    // in as that customer underneath. Every portal route reads
+    // `req.session.portal` and would have served their tickets to the agent —
+    // and, worse, would keep serving them after the agent signed out, because
+    // the portal half was never the half being cleared.
+    delete req.session.portal;
+
     return tenantId;
   },
 

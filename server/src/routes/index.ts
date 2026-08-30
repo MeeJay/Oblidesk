@@ -47,6 +47,8 @@ import usersRoutes from './users.routes';
 import teamsRoutes from './teams.routes';
 import permissionSetsRoutes from './permissionSets.routes';
 import profileRoutes from './profile.routes';
+import organizationsRoutes from './organizations.routes';
+import portalAdminRoutes from './portalAdmin.routes';
 import settingsRoutes from './settings.routes';
 import auditRoutes from './audit.routes';
 import ticketsRoutes from './tickets.routes';
@@ -139,6 +141,19 @@ tenantRouter.use('/users', usersRoutes);
 tenantRouter.use('/teams', teamsRoutes);
 tenantRouter.use('/permission-sets', permissionSetsRoutes);
 tenantRouter.use('/profile', profileRoutes);
+
+// The customer directory and the requesters in it — the AGENT side of the
+// portal, and the mirror image of `/api/portal` in the global tier above.
+//
+// The two are one hyphen apart on purpose, because they administer the same
+// two tables, and they share nothing else: `/api/portal` guards itself with
+// `requirePortalSession` and serves a principal that has no `users` row, while
+// these two sit in the tenant tier behind `requireAuth` + `requireTenant` and
+// require `portal_admin` on every route, reads included. A portal session
+// reaching either of these is impossible — `requireAuth` reads
+// `req.session.userId`, which a portal session never sets.
+tenantRouter.use('/organizations', organizationsRoutes);
+tenantRouter.use('/portal-admin', portalAdminRoutes);
 
 // Tenant settings and the audit trail.
 tenantRouter.use('/settings', settingsRoutes);

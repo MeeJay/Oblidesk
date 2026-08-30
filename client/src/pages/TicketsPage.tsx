@@ -53,9 +53,10 @@ import ContextRail from '@/components/tickets/ContextRail';
 import TicketQueue from '@/components/tickets/TicketQueue';
 import ViewBar, { QUEUE_GROUP_FIELDS, type QueueGroupField } from '@/components/tickets/ViewBar';
 import { NewTicketModal } from '@/components/tickets/NewTicketModal';
+import TicketGrid from '@/components/tickets/TicketGrid';
 import { TicketConversation } from '@/pages/TicketDetailPage';
 import { useKeyboard } from '@/hooks/useKeyboard';
-import { selectByCategory, useTicketStore } from '@/store/ticketStore';
+import { selectByCategory, selectRows, useTicketStore } from '@/store/ticketStore';
 import { useUiStore } from '@/store/uiStore';
 import { useViewStore } from '@/store/viewStore';
 
@@ -128,6 +129,8 @@ export function TicketsPage(): JSX.Element {
    * differently instead of refetched.
    */
   const boardMode = location.pathname.startsWith('/board');
+  /** `/grid` is the same queue as a table, driven by the view's columns. */
+  const gridMode = location.pathname.startsWith('/grid');
 
   const railOpen = useUiStore((state) => state.contextRailOpen);
   const toggleRail = useUiStore((state) => state.toggleContextRail);
@@ -138,6 +141,13 @@ export function TicketsPage(): JSX.Element {
   const initialSlug = useViewStore((state) => state.initialSlug);
 
   const setQuery = useTicketStore((state) => state.setQuery);
+
+  // Read unconditionally, before any layout branch returns: a selector called
+  // only in one layout would change the hook order between /tickets and /grid.
+  const gridTickets = useTicketStore(selectRows);
+  const isLoading = useTicketStore((state) => state.isLoading);
+  const hasMore = useTicketStore((state) => state.hasMore);
+  const fetchMore = useTicketStore((state) => state.fetchMore);
 
   const [queueWidth, setQueueWidth] = useState(() => readWidth(QUEUE_WIDTH_KEY, QUEUE_BOUNDS));
   const [railWidth, setRailWidth] = useState(() => readWidth(RAIL_WIDTH_KEY, RAIL_BOUNDS));
@@ -158,6 +168,13 @@ export function TicketsPage(): JSX.Element {
   // `?view=` wins (it is what the sidebar links to and what a shared URL
   // carries); the remembered choice is the fallback.
   const urlView = searchParams.get('view');
+  /**
+   * `?queue=` is what the sidebar's queue rail actually links to: those items
+   * point at `/queues/:slug`, which `QueueRedirect` turns into
+   * `/tickets?queue=<slug>`. Nothing read it, so clicking a queue navigated,
+   * repainted, and filtered nothing — the rail looked decorative.
+   */
+  const urlQueue = searchParams.get('queue');
 
   useEffect(() => {
     if (urlView && urlView !== activeSlug) setActive(urlView);
@@ -180,20 +197,31 @@ export function TicketsPage(): JSX.Element {
     // instantly snap back to the remembered one.
     const first = lastAppliedSlug.current === undefined;
     const slug = urlView ?? activeSlug ?? (first ? initialSlug() : null);
-    if (!first && lastAppliedSlug.current === slug) return;
-    lastAppliedSlug.current = slug;
+    // The queue is part of what was applied, not a separate axis: keying only
+    // on the view slug would ignore a move from one queue to another inside the
+    // same view, which is precisely what the rail does.
+    const applied = `${slug ?? ''} ${urlQueue ?? ''}`;
+    if (!first && lastAppliedSlug.current === applied) return;
+    lastAppliedSlug.current = applied;
+
+    // The queue narrows the view rather than replacing it — the server merges
+    // an ad-hoc filter with the view's own using `all`, so "Breaching soon" on
+    // the Network queue means both, which is the only reading that is useful.
+    const queueSlugs = urlQueue ? [urlQueue] : undefined;
 
     if (slug) {
       setActive(slug);
-      void setQuery({ viewSlug: slug, cursor: null });
+      void setQuery({ viewSlug: slug, queueSlugs, cursor: null });
     } else {
-      void setQuery({ viewSlug: undefined, cursor: null });
+      void setQuery({ viewSlug: undefined, queueSlugs, cursor: null });
     }
-  }, [views, urlView, activeSlug, initialSlug, setActive, setQuery]);
+  }, [views, urlView, urlQueue, activeSlug, initialSlug, setActive, setQuery]);
 
   const handleSelectView = useCallback(
     (slug: string | null) => {
       setActive(slug);
+      // `queue` is deliberately left alone: it was put there by the rail and
+      // changing the view inside a queue must keep the queue.
       const next = new URLSearchParams(searchParams);
       if (slug) next.set('view', slug);
       else next.delete('view');
@@ -280,6 +308,36 @@ export function TicketsPage(): JSX.Element {
   useEffect(() => {
     setRailTicket((current) => (current && current.id === selectedId ? current : null));
   }, [selectedId]);
+
+  if (gridMode) {
+    return (
+      <div className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-bg-primary">
+        <ViewBar
+          activeSlug={activeSlug}
+          onSelectView={handleSelectView}
+          groupBy={groupBy}
+          onGroupByChange={handleGroupBy}
+        />
+        <div className="px-3">
+          <BulkActionBar />
+        </div>
+        <TicketGrid
+          tickets={gridTickets}
+          columns={views.find((view) => view.slug === activeSlug)?.columns ?? []}
+          isLoading={isLoading}
+          hasMore={hasMore}
+          onOpen={openTicket}
+          onReachEnd={fetchMore}
+          selectedId={selectedId}
+        />
+        <NewTicketModal
+          open={composerOpen}
+          onClose={() => navigate('/grid')}
+          onCreated={(id) => navigate(`/tickets/${id}`)}
+        />
+      </div>
+    );
+  }
 
   if (boardMode) {
     return (
