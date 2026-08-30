@@ -521,7 +521,10 @@ export function Sidebar() {
       }
     };
 
-    void load('/api/queues', setQueues);
+    // Queues are config objects, so they are read from the config store like
+    // every other kind. There is no separate /api/queues collection, and
+    // inventing one would be a second place for the same rows to drift.
+    void load('/api/config/queue?status=published', setQueues);
     void load('/api/views', setViews);
 
     return () => {

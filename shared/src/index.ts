@@ -24,6 +24,13 @@ export * from './demoFixtures';
 // ── Config body shapes (depends on conditions, statusCategories, calendar) ──
 export * from './configKinds';
 
+// ── Problem management (depends on capabilities, statusCategories, configKinds)
+// Placed BEFORE ./types on purpose: it is a leaf of the DTO graph. It declares
+// its own slim `ProblemTicketHeader` rather than importing `Ticket`, so the
+// shared evaluators (HARD RULE 12) stay importable from the client without
+// dragging the whole DTO surface behind them.
+export * from './problem';
+
 // ── DTOs and wire types (depends on everything above) ───────────────────────
 // NOTE: `ApprovalMode` is declared once, in ./configKinds, and re-exported by
 // ./types — so this star export is unambiguous. If you add a symbol to

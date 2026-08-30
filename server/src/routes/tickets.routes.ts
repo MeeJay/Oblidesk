@@ -47,6 +47,7 @@ import {
   searchTickets,
   splitTicket,
   suggestTickets,
+  summarizeTickets,
   transitionTicket,
   updateTicket,
   addWatcher,
@@ -61,6 +62,9 @@ const destroy = [requireAuth, requireCapability(CAPABILITIES.TICKET_DELETE)] as 
 
 // ── Collection: literal paths first ──────────────────────────────────────────
 
+// Literal, so it must precede `/:id` — otherwise 'summary' is parsed as an id
+// and the header chips get a 400 that reads like a client bug.
+router.get('/summary', ...read, summarizeTickets);
 router.get('/search', ...read, searchTickets);
 router.get('/suggest', ...read, suggestTickets);
 

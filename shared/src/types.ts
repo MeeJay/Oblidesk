@@ -384,7 +384,9 @@ export type DecisionSubsystem =
   | 'rule'
   | 'alert'
   | 'ai'
-  | 'workflow';
+  | 'workflow'
+  /** Problem management — see `PROBLEM_DECISIONS` in ./problem for the catalogue. */
+  | 'problem';
 
 /**
  * HARD RULE 2 — written on the SAME code path as the action, by the engine that
@@ -1064,7 +1066,20 @@ export interface Attachment {
   downloadUrl?: string;
 }
 
-export type AttachmentEntityType = 'ticket' | 'journal' | 'kb_article' | 'mail_message' | 'catalog_request';
+/**
+ * `attachment_links.entity_type` is an unconstrained varchar(32), so adding a
+ * member here is a type-only change. `problem_cause` is how a screenshot pinned
+ * to an RCA node is stored: HARD RULE 9 keeps ONE refcount, and a second direct
+ * reference to `attachments` from the evidence table would break "the blob dies
+ * with its last link" and let the sweeper delete files still in use.
+ */
+export type AttachmentEntityType =
+  | 'ticket'
+  | 'journal'
+  | 'kb_article'
+  | 'mail_message'
+  | 'catalog_request'
+  | 'problem_cause';
 
 /** The refcount. A blob dies when its last link dies. */
 export interface AttachmentLink {

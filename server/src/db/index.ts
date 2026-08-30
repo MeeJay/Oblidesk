@@ -133,6 +133,29 @@ export const TENANT_SCOPED_TABLES = [
   // and looking a token hash up across tenants would be how a link minted for
   // one desk opens a session on another.
   'portal_login_tokens',
+
+  // ── 006 problem management ────────────────────────────────────────────
+  // All seven carry their own NOT NULL tenant_id, children included, and
+  // that is deliberate rather than lazy:
+  //   • `problem_causes` is read by the RCA statistics query on
+  //     (tenant, category, confidence) WITHOUT touching its analysis, which
+  //     is the same argument that gave `escalation_fires` its own column
+  //     in 004;
+  //   • `problem_cause_evidence` holds foreign keys to six tenant-scoped
+  //     tables, and a link assembled without the tenant in hand is exactly
+  //     how a row ends up pointing across tenants;
+  //   • `problem_candidate_tickets` is scanned by (tenant, ticket) when the
+  //     detector asks "is this incident already in a live candidate?".
+  // `problems` itself is 1:1 with a `record_type = 'problem'` ticket, but
+  // it is not PARENT_SCOPED: the detector and the known-error suggester
+  // read it by tenant without joining `tickets` at all.
+  'problems',
+  'problem_analyses',
+  'problem_causes',
+  'problem_cause_evidence',
+  'problem_alert_signatures',
+  'problem_candidates',
+  'problem_candidate_tickets',
 ] as const;
 
 export type TenantScopedTable = (typeof TENANT_SCOPED_TABLES)[number];

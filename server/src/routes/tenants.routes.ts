@@ -24,6 +24,7 @@ import { requireAuth, currentUserId } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
 import { tenantService, normalizeSlug, isValidSlug } from '../services/tenant.service';
 import { permissionService } from '../services/permission.service';
+import { authService, saveSession } from '../services/auth.service';
 import type { TenantSettings } from '@oblidesk/shared';
 import { logger } from '../utils/logger';
 
@@ -80,6 +81,52 @@ router.get('/mine', async (req, res) => {
   } catch (error) {
     logger.error({ err: error }, 'tenants: memberships failed');
     fail(res, 500, 'Failed to load tenants');
+  }
+});
+
+/**
+ * POST /api/tenants/switch — move the SESSION onto another tenant.
+ *
+ * The session is the right home for this: it survives a reload and a socket
+ * reconnect, and `requireTenant` reads it before anything else. The
+ * `X-Tenant-Id` header is a per-request override for a platform admin, not a
+ * substitute — a client that falls back to it is snapped back to the session's
+ * tenant the moment the session context is adopted again, which reads to the
+ * user as the switch silently refusing.
+ *
+ * Access is checked HERE with `hasTenantAccess`, deliberately the SAME
+ * predicate `buildSessionContext` uses. That agreement is the point: the
+ * builder silently falls back to the user's default tenant when one is out of
+ * reach, which is right for repairing a stale cookie and wrong for an explicit
+ * request. Authorising on a WIDER rule than the builder's would leave the
+ * session pointing at one tenant and the returned context at another.
+ *
+ * Declared before `/:id` so the literal path wins over the parameter.
+ */
+router.post('/switch', async (req, res) => {
+  try {
+    const userId = currentUserId(req);
+    const body = req.body as { tenantId?: unknown } | undefined;
+    const tenantId = parseId(String(body?.tenantId ?? ''));
+    if (tenantId === null) return fail(res, 400, 'A numeric tenantId is required');
+
+    if (!(await permissionService.hasTenantAccess(userId, tenantId))) {
+      // Same answer whether the tenant is unreachable or absent: a switcher
+      // must not become a way to enumerate the tenants of an install.
+      return fail(res, 403, 'You do not have access to that tenant');
+    }
+
+    req.session.currentTenantId = tenantId;
+    await saveSession(req);
+
+    const context = await authService.buildSessionContext(userId, tenantId);
+    if (!context) return fail(res, 403, 'This account has no tenant access');
+
+    logger.info({ userId, tenantId }, 'tenants: session switched');
+    res.json({ success: true, data: context });
+  } catch (error) {
+    logger.error({ err: error }, 'tenants: switch failed');
+    fail(res, 500, 'Failed to switch tenant');
   }
 });
 

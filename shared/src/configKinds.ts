@@ -41,6 +41,20 @@ export const CONFIG_KINDS = [
   'calendar',
   'escalation',
   'approval',
+  /**
+   * The recurrence detector's thresholds and signal weights.
+   *
+   * It lives here rather than in `settings` for one reason: `settings` is a
+   * jsonb blob with no format version, no slug, no diff and no export. A
+   * proposed problem candidate writes `decision_log.rule_slug` +
+   * `rule_version` (HARD RULES 3 and 4) to name the published object that
+   * proposed it — and a candidate raised by a configuration nobody can
+   * retrieve as it stood is a candidate nobody can explain.
+   *
+   * `config_objects.kind` is an unconstrained varchar(32), so this costs no
+   * migration.
+   */
+  'problem_detection',
 ] as const;
 
 export type ConfigKind = (typeof CONFIG_KINDS)[number];
@@ -66,6 +80,7 @@ export const CONFIG_BODY_FORMAT_VERSIONS: Readonly<Record<ConfigKind, number>> =
   calendar: 1,
   escalation: 1,
   approval: 1,
+  problem_detection: 1,
 };
 
 export const CONFIG_KIND_LABELS: Readonly<Record<ConfigKind, { key: string; fallback: string }>> = {
@@ -85,6 +100,7 @@ export const CONFIG_KIND_LABELS: Readonly<Record<ConfigKind, { key: string; fall
   calendar: { key: 'config.kind.calendar', fallback: 'Calendar' },
   escalation: { key: 'config.kind.escalation', fallback: 'Escalation' },
   approval: { key: 'config.kind.approval', fallback: 'Approval' },
+  problem_detection: { key: 'config.kind.problemDetection', fallback: 'Problem detection' },
 };
 
 export function isConfigKind(value: unknown): value is ConfigKind {
@@ -808,6 +824,87 @@ export interface ApprovalBody {
   blockedStatusCategories?: StatusCategory[];
 }
 
+// ── kind: problem_detection ──────────────────────────────────────────────────
+
+/** The six recurrence signals, in the order the candidate card renders them. */
+export const PROBLEM_DETECTION_SIGNALS = [
+  'ci_repetition',
+  'alert_flapping',
+  'subject_cluster',
+  'reopen_pressure',
+  'queue_spike',
+  'known_error_miss',
+] as const;
+
+export type ProblemDetectionSignal = (typeof PROBLEM_DETECTION_SIGNALS)[number];
+
+/**
+ * Signals whose evidence is an EXACT machine identity rather than a
+ * resemblance: the same CI, the same alert dedupe key, the same already
+ * published known error. At least one of these must have fired before a
+ * candidate may be raised (`requireExactSignal`).
+ *
+ * The weights below already make a text-only candidate arithmetically
+ * impossible, but a tenant may edit weights and this invariant may not be
+ * edited away: a card raised because "both tickets contain the word printer"
+ * teaches agents to reject without reading, and a suggestion box that is not
+ * read is worth less than no suggestion box.
+ */
+export const PROBLEM_EXACT_SIGNALS: readonly ProblemDetectionSignal[] = [
+  'ci_repetition',
+  'alert_flapping',
+  'known_error_miss',
+];
+
+/** One signal's switch, weight and thresholds. */
+export interface ProblemSignalSpec {
+  enabled: boolean;
+  /**
+   * Noisy-OR weight in 0..1 — the score this signal alone can reach when
+   * fully saturated. See `scoreProblemCandidate` in ./problem.
+   */
+  weight: number;
+  /** Signal-specific trigger threshold; the meaning is per signal. */
+  threshold: number;
+  /**
+   * Second threshold for the two signals that have one:
+   *   alert_flapping   `threshold` = cleared cycles, `secondary` = peak occurrences
+   *   subject_cluster  `threshold` = matching incidents, `secondary` = min similarity 0..1
+   * Ignored by the other four.
+   */
+  secondary?: number;
+}
+
+export interface ProblemDetectionBody {
+  enabled: boolean;
+  /** Look-back of one pass, in days. */
+  windowDays: number;
+  /** Score at or above which a candidate is raised. */
+  scoreThreshold: number;
+  /** New cards per tenant per pass, best score first. The rest are simply not created. */
+  maxNewCandidatesPerRun: number;
+  /** Keep the "at least one exact signal" guard. Belt and braces over the weights. */
+  requireExactSignal: boolean;
+
+  signals: Readonly<Record<ProblemDetectionSignal, ProblemSignalSpec>>;
+
+  rejection: {
+    /** How long a rejected signature stays suppressed. */
+    cooldownDays: number;
+    /**
+     * A suppressed signature is re-proposed BEFORE the cooldown expires only
+     * when the evidence has materially worsened: the new score reaches
+     * `rejectedScore * escalationFactor`, or the incident count doubled. A
+     * suppression with no way out turns a human "no" into amnesia.
+     */
+    escalationFactor: number;
+  };
+
+  /** HARD RULE 3 — by slug. Used when a candidate is accepted into a problem. */
+  defaultQueueSlug: string | null;
+  defaultPrioritySlug: string | null;
+}
+
 // ── Kind → body map ──────────────────────────────────────────────────────────
 
 /**
@@ -831,6 +928,7 @@ export interface ConfigBodyByKind {
   calendar: CalendarBody;
   escalation: EscalationBody;
   approval: ApprovalBody;
+  problem_detection: ProblemDetectionBody;
 }
 
 export type ConfigBodyFor<K extends ConfigKind> = ConfigBodyByKind[K];
@@ -879,4 +977,7 @@ export const CONFIG_KIND_REFERENCES: Readonly<Record<ConfigKind, readonly Config
   escalation: ['calendar', 'notification_template'],
   // `escalationSlug`, on the body and on a step that escalates on timeout.
   approval: ['calendar', 'escalation'],
+  // `defaultQueueSlug` names a queue; `defaultPrioritySlug` is a cell of the
+  // priority matrix, which is the object that owns the priority vocabulary.
+  problem_detection: ['queue', 'priority_matrix'],
 };

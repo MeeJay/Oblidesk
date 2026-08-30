@@ -173,6 +173,22 @@ export const LIMITS = {
   mergeRevertWindowDays: 30,
   /** Rewind data upstream in Obliance is pruned at 7 days — do not promise more. */
   rewindRetentionDays: 7,
+
+  /**
+   * Ceiling on one closure-cascade pass, deliberately the same number as
+   * `bulkMaxTickets`: the cascade IS a bulk action, and giving it a second,
+   * larger ceiling would be a bulk action that escaped the bulk ceiling.
+   * Beyond it the pass resolves the first N, reports `truncated: true` with
+   * the remainder, and SAYS SO. A truncation that looks like a completion is
+   * the failure nobody catches.
+   */
+  problemCascadeMaxIncidents: 1_000,
+  /** How long a rejected detector signature stays suppressed. */
+  problemCandidateCooldownDays: 90,
+  /** Default look-back of one detection pass. */
+  problemDetectionWindowDays: 14,
+  /** New cards per tenant per pass. A detector that can emit 200 produces zero attention. */
+  problemMaxNewCandidatesPerRun: 5,
 } as const;
 
 /** Never trust the declared MIME type; these are the ones we refuse to serve inline. */
@@ -230,6 +246,13 @@ export const DECISION_SUBSYSTEMS = [
   'alert',
   'ai',
   'workflow',
+  /**
+   * Problem management: promotion, incident linking, RCA conclusions, known
+   * error publication, the closure cascade and the recurrence detector.
+   * `decision_log.subsystem` is an unconstrained varchar(24), so this is a
+   * constant addition with no migration.
+   */
+  'problem',
 ] as const;
 
 /** Apps whose data can appear on a CI, in the order the context rail renders them. */

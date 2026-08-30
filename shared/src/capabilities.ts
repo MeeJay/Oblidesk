@@ -30,6 +30,29 @@ export const CAPABILITIES = {
   TICKET_DELETE: 'ticket_delete',
   /** Create and configure queues, assignment groups and routing. */
   QUEUE_ADMIN: 'queue_admin',
+  /**
+   * Own problem records: promote an incident, link and unlink incidents,
+   * conclude an RCA, publish a known error internally, and run the closure
+   * cascade.
+   *
+   * WHY THIS IS A SEPARATE KEY AND `ticket_rw` DOES NOT COVER IT: `ticket_rw`
+   * is held by every agent on the desk, and the sharpest edge in this module
+   * resolves other people's tickets in bulk from one click. Gating a cascade
+   * that touches 200 incidents behind the same key as "add a work note" is not
+   * a permission model. The desk already draws exactly this line for the
+   * knowledge base (`kb_rw` writes, `kb_publish` publishes); publishing a
+   * workaround the whole desk will apply at 09:00 is the same act.
+   *
+   * WHY THERE IS NO MATCHING `problem_read`: a known error the desk cannot
+   * read is a known error that does not exist. Reading problems and known
+   * errors rides on `ticket_read`, so an existing agent permission set keeps
+   * the intake banner on the day this ships instead of silently losing it.
+   *
+   * Editing the `problem_detection` config object is NOT here either — a
+   * detector definition is automation, and it stays under `automation_admin`
+   * with the rules, macros and escalation ladders.
+   */
+  PROBLEM_RW: 'problem_rw',
   /** Read published knowledge-base articles. */
   KB_READ: 'kb_read',
   /** Draft and edit knowledge-base articles. */
@@ -148,6 +171,19 @@ export const CAPABILITY_CATALOG: readonly CapabilityCatalogEntry[] = [
     sortOrder: 4,
     implies: [CAPABILITIES.TICKET_READ],
     sensitive: false,
+  },
+  {
+    key: CAPABILITIES.PROBLEM_RW,
+    label: 'Manage problems',
+    labelKey: 'capability.problemRw',
+    description:
+      'Promote an incident to a problem, run the root-cause analysis, publish a known error and resolve linked incidents when the problem is fixed.',
+    group: 'tickets',
+    sortOrder: 5,
+    implies: [CAPABILITIES.TICKET_RW],
+    // Sensitive because the closure cascade resolves other people's tickets in
+    // bulk, and because a published known error is read by the whole desk.
+    sensitive: true,
   },
 
   // ── Knowledge ─────────────────────────────────────────────────────────────
@@ -523,11 +559,12 @@ export const CAPABILITY_PRESETS: readonly {
     slug: 'senior_agent',
     name: 'Senior agent',
     nameKey: 'permissionSet.seniorAgent',
-    description: 'Everything an agent does, plus merging, KB authoring and CI edits.',
+    description: 'Everything an agent does, plus merging, problem ownership, KB authoring and CI edits.',
     capabilities: [
       CAPABILITIES.TICKET_RW,
       CAPABILITIES.TICKET_ASSIGN,
       CAPABILITIES.TICKET_DELETE,
+      CAPABILITIES.PROBLEM_RW,
       CAPABILITIES.KB_RW,
       CAPABILITIES.TIME_RW,
       CAPABILITIES.CI_RW,
@@ -544,6 +581,7 @@ export const CAPABILITY_PRESETS: readonly {
       CAPABILITIES.TICKET_RW,
       CAPABILITIES.TICKET_ASSIGN,
       CAPABILITIES.TICKET_DELETE,
+      CAPABILITIES.PROBLEM_RW,
       CAPABILITIES.QUEUE_ADMIN,
       CAPABILITIES.SLA_ADMIN,
       CAPABILITIES.AUTOMATION_ADMIN,

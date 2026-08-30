@@ -23,6 +23,12 @@ services:
       DEFAULT_ADMIN_USERNAME: ${DEFAULT_ADMIN_USERNAME:-admin}
       DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-admin123}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+      # Demonstration data. DEMO_DATA=true creates and fills a tenant whose slug is
+      # "demo"; setting it back to false deletes that tenant and everything in it on
+      # the next boot. Only the tenant carrying the demo marker is ever touched.
+      DEMO_DATA: ${DEMO_DATA:-false}
+      # Ticket count for the demo tenant (1-500).
+      DEMO_VOLUME: ${DEMO_VOLUME:-60}
     volumes:
       # Attachment blob store - survives image updates.
       # Layout: /custom/attachments/<tenant_id>/<yyyy>/<mm>/<sha256[0:2]>/<sha256>

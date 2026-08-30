@@ -33,6 +33,8 @@ import * as ticketService from '../services/ticket.service';
 import * as journalService from '../services/journal.service';
 import * as attachmentService from '../services/attachment.service';
 import * as searchService from '../services/search.service';
+import { countView } from '../services/view.service';
+import { resolveActor } from '../validators/config.validators';
 import { type ActorContext } from '../services/ticket.service';
 import {
   bulkApplySchema,
@@ -203,6 +205,37 @@ export function listTickets(req: Request, res: Response, next: NextFunction): Pr
       ...(page.unsupported.length > 0 ? { unsupportedFilters: page.unsupported } : {}),
       limit: query.limit ?? undefined,
     });
+  });
+}
+
+/**
+ * GET /api/tickets/summary — the two counters the header chips render.
+ *
+ * Counted THROUGH the saved views rather than with a bespoke query, for two
+ * reasons. `countView` is already debounced and capability-aware, so the chips
+ * cost nothing on a busy desk; and the number on the chip is then exactly the
+ * number of rows the user lands on when they click through. A private count
+ * would drift from the list the first time a tenant edits the view, and a
+ * counter that disagrees with the thing it links to is worse than no counter.
+ *
+ * A tenant that has deleted one of the two seeded views gets 0 for that chip
+ * rather than a failed request. The header is decoration: it must never be the
+ * reason a page reports an error.
+ */
+export function summarizeTickets(req: Request, res: Response, next: NextFunction): Promise<void> {
+  return handle(res, next, async () => {
+    const actor = await resolveActor(req);
+
+    const count = async (slug: string): Promise<number> => {
+      try {
+        return (await countView(actor.tenantId, actor, slug)).count;
+      } catch {
+        return 0;
+      }
+    };
+
+    const [open, breachingSoon] = await Promise.all([count('all_open'), count('breaching_soon')]);
+    ok(res, { open, breachingSoon });
   });
 }
 
