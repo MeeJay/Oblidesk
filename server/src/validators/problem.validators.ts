@@ -385,8 +385,15 @@ export const changeProblemAnalysisStateSchema = z.object({
 export const createProblemCauseSchema = z.object({
   parentCauseId: idSchema.nullish(),
   category: z.enum(CAUSE_CATEGORIES).optional(),
-  /** `problem_causes.statement` is varchar(512) — a why, not an essay. */
-  statement: z.string().trim().min(1).max(512),
+  /**
+   * `problem_causes.statement` is varchar(512) — a why, not an essay.
+   *
+   * OPTIONAL at creation, and that is the point: the canvas creates the node on
+   * click and the agent types into it afterwards, so demanding the sentence up
+   * front made every "add a why" button a 400. Required-ness is collected by
+   * `evaluateCauseConfirmation` when the cause is confirmed (HARD RULE 12).
+   */
+  statement: z.string().trim().max(512).optional(),
   detailMd: markdown.nullish(),
   kind: z.enum(CAUSE_KINDS).optional(),
   sortOrder: z.coerce.number().int().min(0).max(100_000).optional(),

@@ -48,6 +48,7 @@ import {
   splitTicket,
   suggestTickets,
   summarizeTickets,
+  explainTicket,
   transitionTicket,
   updateTicket,
   addWatcher,
@@ -91,6 +92,9 @@ router.delete('/:id', ...destroy, deleteTicket);
 router.post('/:id/restore', ...destroy, restoreTicket);
 
 /** What the header bar may render, blocked moves included, with reasons. */
+// The Why panel: a straight read of decision_log (HARD RULE 2).
+router.get('/:id/explain', ...read, explainTicket);
+
 router.get('/:id/transitions', ...read, getTransitions);
 /** The ONLY endpoint that enforces required-ness. */
 router.post('/:id/transition', ...write, transitionTicket);

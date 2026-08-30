@@ -235,6 +235,7 @@ function evidenceCountOf(cause: ProblemCause): number {
 function toSnapshot(cause: ProblemCause): AnalysisCauseSnapshot {
   return {
     id: cause.id,
+    statement: cause.statement ?? '',
     kind: cause.kind,
     category: cause.category,
     confidence: cause.confidence,
@@ -1447,7 +1448,11 @@ function ConfirmCauseModal({
   // null here and can never reach 'confirmed'.
   const gate = cause
     ? evaluateCauseConfirmation({
-        cause: { kind: cause.kind, evidenceCount: evidenceCountOf(cause) },
+        cause: {
+          kind: cause.kind,
+          evidenceCount: evidenceCountOf(cause),
+          statement: cause.statement ?? '',
+        },
         toConfidence: confidence,
         confirmationMethod: method === '' ? null : method,
         confirmedBy: session?.user.id ?? null,

@@ -52,6 +52,7 @@ import BulkActionBar from '@/components/tickets/BulkActionBar';
 import ContextRail from '@/components/tickets/ContextRail';
 import TicketQueue from '@/components/tickets/TicketQueue';
 import ViewBar, { QUEUE_GROUP_FIELDS, type QueueGroupField } from '@/components/tickets/ViewBar';
+import { NewTicketModal } from '@/components/tickets/NewTicketModal';
 import { TicketConversation } from '@/pages/TicketDetailPage';
 import { useKeyboard } from '@/hooks/useKeyboard';
 import { selectByCategory, useTicketStore } from '@/store/ticketStore';
@@ -150,6 +151,8 @@ export function TicketsPage(): JSX.Element {
   const selectedId = parsedId !== null && parsedId > 0 ? parsedId : null;
   /** An `:id` that is present but is not a ticket id — `/tickets/ACME-42`. */
   const badRouteId = routeId !== '' && routeId !== 'new' && selectedId === null;
+  /** `/tickets/new` is the composer, not a ticket id. */
+  const composerOpen = routeId === 'new';
 
   // ── Which view drives the queue ──────────────────────────────────────────
   // `?view=` wins (it is what the sidebar links to and what a shared URL
@@ -291,12 +294,22 @@ export function TicketsPage(): JSX.Element {
           <BulkActionBar />
         </div>
         <CategoryBoard onOpen={openTicket} />
+        <NewTicketModal
+          open={composerOpen}
+          onClose={() => navigate('/board')}
+          onCreated={(id) => navigate(`/tickets/${id}`)}
+        />
       </div>
     );
   }
 
   return (
     <div className="flex h-full min-h-0 w-full overflow-hidden bg-bg-primary">
+      <NewTicketModal
+        open={composerOpen}
+        onClose={() => navigate('/tickets')}
+        onCreated={(id) => navigate(`/tickets/${id}`)}
+      />
       {/* ══ Pane 1 — the queue ════════════════════════════════════════════ */}
       <div
         style={{ width: `${queueWidth}px` }}

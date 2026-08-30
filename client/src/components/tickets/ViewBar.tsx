@@ -31,11 +31,14 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { clsx } from 'clsx';
 import { useTranslation } from 'react-i18next';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   ArrowDownWideNarrow,
   ArrowUpWideNarrow,
   Filter as FilterIcon,
   Layers,
+  LayoutGrid,
+  Rows3,
   RotateCw,
   Search,
   SlidersHorizontal,
@@ -182,6 +185,12 @@ export default function ViewBar({
   className,
 }: ViewBarProps): JSX.Element {
   const { t } = useTranslation();
+  // The kanban was implemented (CategoryBoard) but had no way in: '/board'
+  // was reachable only from the command palette. The layout lives in the
+  // pathname, so switching is a navigation, not a piece of state.
+  const location = useLocation();
+  const navigate = useNavigate();
+  const boardMode = location.pathname.startsWith('/board');
 
   const views = useViewStore(selectSidebarViews);
   const counts = useViewStore((state) => state.counts);
@@ -455,6 +464,36 @@ export default function ViewBar({
       {/* ── Controls: sort, grouping, refresh ─────────────────────────────
           Their own row, so the view strip above keeps the full width. */}
       <div className="flex flex-wrap items-center gap-2">
+
+        {/* ── Layout: list or kanban ─────────────────────────────────────── */}
+        <div className="flex shrink-0 items-center gap-0.5 rounded-pill bg-bg-tertiary p-0.5">
+          <button
+            type="button"
+            onClick={() => navigate('/tickets')}
+            aria-pressed={!boardMode}
+            title={t('views.layoutList', 'List')}
+            className={clsx(
+              'flex items-center gap-1 rounded-pill px-2 py-1 text-[11px] transition-colors',
+              !boardMode ? 'bg-bg-hover text-text-primary' : 'text-text-muted hover:text-text-secondary',
+            )}
+          >
+            <Rows3 size={13} aria-hidden />
+            <span className="sr-only">{t('views.layoutList', 'List')}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate('/board')}
+            aria-pressed={boardMode}
+            title={t('views.layoutBoard', 'Board')}
+            className={clsx(
+              'flex items-center gap-1 rounded-pill px-2 py-1 text-[11px] transition-colors',
+              boardMode ? 'bg-bg-hover text-text-primary' : 'text-text-muted hover:text-text-secondary',
+            )}
+          >
+            <LayoutGrid size={13} aria-hidden />
+            <span className="sr-only">{t('views.layoutBoard', 'Board')}</span>
+          </button>
+        </div>
 
         {/* ── Sort ───────────────────────────────────────────────────────── */}
         <label className="flex shrink-0 items-center gap-1.5 rounded-pill bg-bg-tertiary py-1 pl-2.5 pr-1 text-[11px] text-text-muted">

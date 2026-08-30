@@ -17,6 +17,7 @@
  */
 
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { setLanguage } from '@/i18n';
 import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
 import {
@@ -136,7 +137,7 @@ function Toggle({
 }
 
 export function ProfilePage() {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
 
   const [loading, setLoading] = useState(true);
   const [profile, setProfile] = useState<ProfilePayload | null>(null);
@@ -214,7 +215,7 @@ export function ProfilePage() {
         preferredLanguage: locale,
       });
       setProfile((prev) => (prev ? { ...prev, user: res.data.data } : prev));
-      await i18n.changeLanguage(locale);
+      setLanguage(locale);
       toast.success(t('profile.saved', 'Profil enregistré.'));
     } catch (err) {
       toast.error(serverError(err, t('profile.saveFailed', "L'enregistrement a échoué.")));

@@ -34,6 +34,7 @@ import * as journalService from '../services/journal.service';
 import * as attachmentService from '../services/attachment.service';
 import * as searchService from '../services/search.service';
 import { countView } from '../services/view.service';
+import { decisionService } from '../services/decision.service';
 import { resolveActor } from '../validators/config.validators';
 import { type ActorContext } from '../services/ticket.service';
 import {
@@ -222,6 +223,23 @@ export function listTickets(req: Request, res: Response, next: NextFunction): Pr
  * rather than a failed request. The header is decoration: it must never be the
  * reason a page reports an error.
  */
+/**
+ * GET /api/tickets/:id/explain — the Why panel.
+ *
+ * A straight read of `decision_log` for this ticket (HARD RULE 2): every
+ * engine wrote its row on the same code path as the action it explains, so
+ * nothing is reconstructed here. `explainDetailed` adds the SLA ledger, the
+ * approvals and the rule executions the plain entries reference, which is what
+ * turns "priority set to P1" into a sentence naming the rule that did it.
+ */
+export function explainTicket(req: Request, res: Response, next: NextFunction): Promise<void> {
+  return handle(res, next, async () => {
+    const tenantId = tenantOf(req);
+    const id = intParam(req, 'id');
+    ok(res, await decisionService.explainDetailed(tenantId, id));
+  });
+}
+
 export function summarizeTickets(req: Request, res: Response, next: NextFunction): Promise<void> {
   return handle(res, next, async () => {
     const actor = await resolveActor(req);

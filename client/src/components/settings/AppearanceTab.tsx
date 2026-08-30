@@ -12,6 +12,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { setLanguage } from '@/i18n';
 import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
 import { Check, Languages, Palette } from 'lucide-react';
@@ -30,7 +31,7 @@ function serverError(err: unknown, fallback: string): string {
 }
 
 export function AppearanceTab() {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
 
   const [loading, setLoading] = useState(true);
   const [preferences, setPreferences] = useState<UserPreferences>({});
@@ -78,7 +79,7 @@ export function AppearanceTab() {
 
   async function pickLocale(next: SupportedLocale) {
     setLocale(next);
-    await i18n.changeLanguage(next);
+    setLanguage(next);
     try {
       await apiClient.put('/profile', { preferredLanguage: next });
     } catch (err) {

@@ -791,7 +791,8 @@ export interface ChangeProblemAnalysisStateRequest {
 export interface CreateProblemCauseRequest {
   parentCauseId?: number | null;
   category?: CauseCategory;
-  statement: string;
+  /** Optional: the canvas creates the node, the agent types into it after. */
+  statement?: string;
   detailMd?: string | null;
   kind?: CauseKind;
   sortOrder?: number;
@@ -925,6 +926,8 @@ function isBlank(value: string | null | undefined): boolean {
 /** What the evaluator needs about one cause node. */
 export interface AnalysisCauseSnapshot {
   id: number;
+  /** The why itself. Empty while the node is still a placeholder. */
+  statement: string;
   kind: CauseKind;
   category: CauseCategory;
   confidence: CauseConfidence;
@@ -1086,7 +1089,7 @@ export function evaluateAnalysisTransition(
 // ── 2. Confirming (or refuting) a cause ──────────────────────────────────────
 
 export interface CauseConfirmationInput {
-  cause: Pick<AnalysisCauseSnapshot, 'kind' | 'evidenceCount'>;
+  cause: Pick<AnalysisCauseSnapshot, 'kind' | 'evidenceCount' | 'statement'>;
   toConfidence: CauseConfidence;
   confirmationMethod: CauseConfirmationMethod | null;
   /**
@@ -1114,6 +1117,20 @@ export function evaluateCauseConfirmation(input: CauseConfirmationInput): Proble
   const missingCapabilities = capabilityGate(input.actor, CAPABILITIES.PROBLEM_RW);
 
   if (input.toConfidence === 'confirmed' || input.toConfidence === 'refuted') {
+    // A node is CREATED empty on purpose — the tree is built by clicking, then
+    // filled in, exactly as HARD RULE 12 has inline edits work everywhere else.
+    // The completeness debt is collected HERE, at the gate, and not at the
+    // keyboard: a root cause with no sentence explains nothing, and confirming
+    // one would put an empty string in every report that reads this analysis.
+    if (input.cause.statement.trim().length === 0) {
+      blockers.push(
+        requirement(
+          'cause_needs_statement',
+          'problem.causeBlocked.needsStatement',
+          'Write the cause down before confirming it.',
+        ),
+      );
+    }
     if (input.cause.evidenceCount < 1) {
       blockers.push(
         requirement(

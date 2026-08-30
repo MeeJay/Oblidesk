@@ -602,6 +602,7 @@ async function loadCauses(
 function toCauseSnapshot(cause: ProblemCause): AnalysisCauseSnapshot {
   return {
     id: cause.id,
+    statement: cause.statement ?? '',
     kind: cause.kind,
     category: cause.category,
     confidence: cause.confidence,
@@ -2214,7 +2215,11 @@ export async function confirmCause(
     const method = input.confirmationMethod ?? null;
 
     const evaluation = evaluateCauseConfirmation({
-      cause: { kind: current.kind as CauseKind, evidenceCount: evidenceIds.length },
+      cause: {
+        kind: current.kind as CauseKind,
+        evidenceCount: evidenceIds.length,
+        statement: String(current.statement ?? ''),
+      },
       toConfidence: input.confidence,
       confirmationMethod: method,
       // An automation actor carries no user id, and the evaluator refuses on

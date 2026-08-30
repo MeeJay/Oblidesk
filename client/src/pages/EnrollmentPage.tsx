@@ -15,6 +15,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
+import { setLanguage } from '@/i18n';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronLeft, ChevronRight, KeyRound, Mail, Palette, ShieldCheck, User as UserIcon } from 'lucide-react';
@@ -101,7 +102,7 @@ function Stepper({ steps, current }: { steps: Step[]; current: Step }) {
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 export function EnrollmentPage() {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const navigate = useNavigate();
 
   const [loading, setLoading] = useState(true);
@@ -202,7 +203,7 @@ export function EnrollmentPage() {
     try {
       if (step === 'language') {
         await apiClient.put('/profile', { preferredLanguage: locale });
-        await i18n.changeLanguage(locale);
+        setLanguage(locale);
       } else if (step === 'profile') {
         await apiClient.put('/profile', {
           displayName: displayName.trim() || null,

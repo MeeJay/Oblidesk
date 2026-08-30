@@ -14,6 +14,7 @@
  */
 
 import { useEffect, useState, type FormEvent } from 'react';
+import { setLanguage } from '@/i18n';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { ExternalLink, UserCircle } from 'lucide-react';
@@ -31,7 +32,7 @@ const LOCALE_LABELS: Record<string, string> = {
 };
 
 export function SsoEnrollPage() {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const redirectTo = searchParams.get('redirect') ?? '/';
@@ -81,7 +82,7 @@ export function SsoEnrollPage() {
         preferredLanguage: locale,
       });
       await apiClient.put('/profile/preferences', { preferredTheme: theme });
-      await i18n.changeLanguage(locale);
+      setLanguage(locale);
       navigate(redirectTo, { replace: true });
     } catch (err) {
       const message = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
