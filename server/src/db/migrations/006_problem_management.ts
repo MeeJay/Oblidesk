@@ -190,7 +190,7 @@ export async function up(knex: Knex): Promise<void> {
     t.boolean('rca_required').notNullable().defaultTo(true)
       .comment('Some problems need no internal analysis (a vendor bug with a public advisory). Without this flag the evaluator either demands an RCA and agents type "vendor bug" into a five-whys chain, or demands nothing and the RCA is never done.');
     t.string('closure_policy', 32).notNullable().defaultTo('notify_only')
-      .comment('The cascade rule is a decision the problem owner takes ONCE, visibly, on the problem — not a global switch someone flipped a year ago.');
+      .comment('The cascade rule is a decision the problem owner takes ONCE, visibly, on the problem, not a global switch someone flipped a year ago.');
 
     t.boolean('major').notNullable().defaultTo(false);
     t.timestamp('major_review_due_at', { useTz: true }).nullable()
@@ -646,7 +646,7 @@ export async function up(knex: Knex): Promise<void> {
     t.integer('detector_version').notNullable();
 
     t.integer('occurrence_count').notNullable().defaultTo(1)
-      .comment('A re-detection BUMPS this row. It never inserts a second one — the suite_alerts doctrine, reused.');
+      .comment('A re-detection BUMPS this row. It never inserts a second one: the suite_alerts doctrine, reused.');
     t.timestamp('proposed_at', { useTz: true }).notNullable().defaultTo(knex.fn.now());
     t.timestamp('last_seen_at', { useTz: true }).notNullable().defaultTo(knex.fn.now());
 

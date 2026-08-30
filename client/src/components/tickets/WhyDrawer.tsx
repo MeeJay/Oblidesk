@@ -37,6 +37,7 @@ import {
   Gauge,
   Loader2,
   ShieldCheck,
+  Siren,
   Timer,
   X,
 } from 'lucide-react';
@@ -116,6 +117,7 @@ const SUBSYSTEM_META: Readonly<
   alert: { key: 'why.subsystem.alert', fallback: 'Alerte', icon: AlertTriangle },
   ai: { key: 'why.subsystem.ai', fallback: 'IA', icon: Bot },
   workflow: { key: 'why.subsystem.workflow', fallback: 'Workflow', icon: ChevronRight },
+  problem: { key: 'why.subsystem.problem', fallback: 'Problème', icon: Siren },
 };
 
 /** Which config kind a subsystem's `ruleSlug` points at, for the deep link. */
@@ -130,6 +132,10 @@ const SUBSYSTEM_CONFIG_KIND: Readonly<Record<DecisionSubsystem, string>> = {
   alert: 'alert_binding',
   ai: 'rule',
   workflow: 'state_machine',
+  // Problem decisions come from the engine, not from a config object, so
+  // there is nothing to deep-link at. 'rule' is the map's own fallback and
+  // is what `ai` uses for the same reason.
+  problem: 'rule',
 };
 
 function TraceLines({ trace, depth = 0 }: { trace: ConditionTrace; depth?: number }): JSX.Element {

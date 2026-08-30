@@ -846,6 +846,24 @@ export interface RejectProblemCandidateRequest {
   cooldownDays?: number;
 }
 
+/** Keyset-free list query for the problem board. Mirrors `TicketListQuery` habits. */
+export interface ProblemListQuery {
+  page?: number;
+  limit?: number;
+  knownErrorState?: KnownErrorState | KnownErrorState[];
+  /** HARD RULE 5 — filter on the TICKET's category, never on a status slug. */
+  statusCategory?: StatusCategory | StatusCategory[];
+  queueSlug?: string;
+  assigneeId?: number;
+  ciId?: number;
+  major?: boolean;
+  detectedBy?: ProblemDetectedBy;
+  /** Free text against `problems.search_tsv` plus the ticket subject trigram. */
+  q?: string;
+  sort?: 'last_incident_at' | 'incident_count' | 'created_at' | 'major_review_due_at';
+  direction?: 'asc' | 'desc';
+}
+
 export interface ProblemCascadeRequest {
   /** `problems.row_version`. */
   baseRowVersion: number;
@@ -1701,6 +1719,30 @@ export interface ProblemCascadeOutcome {
   workedNotWaiting: number;
   truncated: boolean;
   remaining: number;
+}
+
+/**
+ * What `problemService.cascadeOnResolve()` returns, and what the dry run
+ * returns unchanged. One shape for the preview and the result, so the page
+ * that said "12 will be resolved" renders the same component afterwards
+ * saying "12 were resolved".
+ */
+export interface ProblemCascadeResult {
+  problemTicketId: number;
+  policy: ProblemClosurePolicy;
+  dryRun: boolean;
+  /** Decided before anything was written, by `planClosureCascade`. */
+  plan: CascadePlan;
+  /** The census written to `decision_log`. Identical to the plan on a dry run. */
+  outcome: ProblemCascadeOutcome;
+  /** Incidents actually transitioned. Empty on a dry run. */
+  resolvedTicketIds: number[];
+  /**
+   * Incidents left to a human, INCLUDING the two reasons the plan cannot
+   * predict: `concurrent_edit` (a row_version moved under the pass) and
+   * `transition_refused` (a guard wanted a field the cascade cannot supply).
+   */
+  blocked: Array<{ ticketId: number; number: string; reason: CascadeBlockReason }>;
 }
 
 /** Shape of the detection pass's `outcome`. */
