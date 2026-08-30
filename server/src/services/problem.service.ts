@@ -1009,6 +1009,18 @@ export async function promote(
     // The originating link, plus anything the dialog batched with it, in the
     // SAME transaction: a problem that exists without its founding incident is
     // a record nobody can explain.
+    // Same guard `linkIncidents` applies. Refused, not skipped: the caller asked
+    // to promote THIS incident, and silently producing a problem with no
+    // founding link would be a record nobody can explain.
+    const alreadyUnder = await problemsLinkedTo(tenantId, incident.id, tx);
+    if (alreadyUnder.length > 0) {
+      throw new AppError(
+        409,
+        'That incident already hangs under another problem. Unlink it first, or link it to the existing problem instead.',
+        { code: 'conflict', payload: { problemTicketIds: alreadyUnder.map((row) => row.to_ticket_id) } },
+      );
+    }
+
     await ticketService.addLink(
       tenantId,
       actor,
@@ -1085,6 +1097,31 @@ export async function promote(
  *                                whichever is fixed first, while the other is
  *                                still open and still hurting it.
  */
+/**
+ * The problems an incident already hangs under.
+ *
+ * Extracted so `linkIncidents` and `promote` ask the SAME question. They did
+ * not: `linkIncidents` refused a second problem with `linked_to_another_problem`
+ * while `promote` wrote its founding link straight through, so promoting an
+ * already-linked incident quietly put it under two problems — and the cascade
+ * of whichever was fixed first would resolve it while the other was still open
+ * and still hurting it. That is the exact failure the guard exists to prevent.
+ */
+async function problemsLinkedTo(
+  tenantId: number,
+  incidentId: number,
+  tx: Executor,
+): Promise<Array<{ to_ticket_id: number }>> {
+  return (await scoped('ticket_link', tenantId, tx)
+    .join('tickets as other', 'other.id', 'ticket_link.to_ticket_id')
+    .where('other.tenant_id', tenantId)
+    .where('ticket_link.from_ticket_id', incidentId)
+    .where('ticket_link.kind', PROBLEM_LINK_KIND)
+    .where('other.record_type', 'problem')
+    .whereNull('other.deleted_at')
+    .select('ticket_link.to_ticket_id')) as unknown as Array<{ to_ticket_id: number }>;
+}
+
 export async function linkIncidents(
   tenantId: number,
   actor: ActorContext,
@@ -1128,14 +1165,7 @@ export async function linkIncidents(
         continue;
       }
 
-      const existing = (await scoped('ticket_link', tenantId, tx)
-        .join('tickets as other', 'other.id', 'ticket_link.to_ticket_id')
-        .where('other.tenant_id', tenantId)
-        .where('ticket_link.from_ticket_id', incidentId)
-        .where('ticket_link.kind', PROBLEM_LINK_KIND)
-        .where('other.record_type', 'problem')
-        .whereNull('other.deleted_at')
-        .select('ticket_link.to_ticket_id')) as unknown as Array<{ to_ticket_id: number }>;
+      const existing = await problemsLinkedTo(tenantId, incidentId, tx);
 
       if (existing.some((row) => row.to_ticket_id === problemTicketId)) {
         skipped.push({ ticketId: incidentId, reason: 'already_linked' });

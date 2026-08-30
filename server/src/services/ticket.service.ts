@@ -343,6 +343,31 @@ function approvalEngine(): ApprovalEngine | null {
   return approvalModule;
 }
 
+/**
+ * The problem engine, reached the same lazy way as escalation and approval.
+ *
+ * It has to be lazy: `problem.service` imports THIS module (it creates the
+ * problem ticket and transitions the incidents its cascade resolves), so a
+ * static import would close the cycle. The engine was written with a hook
+ * called `onProblemResolved` and its own header says it is "registered on
+ * ticket.service's transition hook" — it never was, so the automatic cascade
+ * and the known-error retirement were dead code behind a manual button.
+ */
+type ProblemEngineModule = typeof import('./problem.service');
+
+let problemModule: ProblemEngineModule | null | undefined;
+
+function problemEngine(): ProblemEngineModule | null {
+  if (problemModule === undefined) {
+    try {
+      problemModule = require('./problem.service') as ProblemEngineModule;
+    } catch {
+      problemModule = null;
+    }
+  }
+  return problemModule;
+}
+
 type SlaEngineModule = typeof import('./sla.service');
 
 let slaModule: SlaEngineModule | null | undefined;
@@ -2427,6 +2452,25 @@ export async function transition(
             });
           });
         }
+
+        // A problem reaching a resolved category is what runs the cascade over
+        // its linked incidents and retires its known error. Inside THIS
+        // transaction, so the cascade and the transition that caused it commit
+        // or roll back together, and `runHook` keeps a cascade failure from
+        // taking the transition down with it.
+        await runHook('problem.onResolved', tenantId, ticketId, () =>
+          problemEngine()?.onProblemResolved({
+            tenantId,
+            ticket: {
+              id: ticketId,
+              recordType: ticket.recordType,
+              statusCategory: ticket.statusCategory,
+            },
+            previous: { statusCategory: beforeTicket.statusCategory },
+            actor,
+            trx: tx,
+          }),
+        );
 
         await runHook('rules.onTicketTransitioned', tenantId, ticketId, () =>
           rulesEngine.onTicketTransitioned?.({
