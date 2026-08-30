@@ -12,9 +12,14 @@
  *      cannot show.
  *
  *   2. THE LINKED INCIDENTS, each with the weight it carries in the closure
- *      cascade. The plan is computed HERE by `planClosureCascade`, the exact
- *      function the server runs when the problem resolves, so the count on
- *      screen and the count in the decision log cannot disagree.
+ *      cascade. `planClosureCascade` is the arithmetic on both sides, but the
+ *      POPULATION is not the same on both sides: the list below is ONE server
+ *      page, while the cascade acts on every linked incident. So the rows are
+ *      classified here, from what is on screen, and every COUNT the operator
+ *      reads — the tiles, the truncation warning, the confirm dialog — comes
+ *      from the server's own preview, which runs the same function over all of
+ *      them. A figure that quantifies a bulk mutation of customer-facing
+ *      tickets must never be the total of the visible slice.
  *
  *   3. THE WORKAROUND and its publication as a known error.
  *
@@ -36,8 +41,12 @@
  * `problem_causes.row_version` (one node). They are separate concurrency
  * domains on purpose: a facilitator typing into a why must not 409 the team
  * lead editing the workaround. Each save sends the version it read; a mismatch
- * comes back as a 409 carrying the current row, and the banner offers the
- * server's version rather than silently overwriting.
+ * comes back as a 409 carrying the current row, and ALL THREE rebase on it
+ * rather than silently overwriting — the folder through the banner, the
+ * workshop by putting the server's row straight back into the node under the
+ * server's own message. Rebasing is not courtesy: the version left in state is
+ * the base of the NEXT save, so a domain that drops the payload keeps
+ * re-sending a version that has already lost, and the node stops saving at all.
  *
  * HARD RULE 11 — no border on any card, pill or button below.
  */
@@ -98,12 +107,14 @@ import {
   evaluateCauseConfirmation,
   evaluateKnownErrorPublication,
   planClosureCascade,
+  statusCategoryLabel,
 } from '@oblidesk/shared';
 import type {
   AddProblemCauseEvidenceRequest,
   AnalysisCauseSnapshot,
   CascadeBucket,
   CascadeIncidentSnapshot,
+  CascadePlan,
   CauseCategory,
   CauseConfidence,
   CauseConfirmationMethod,
@@ -206,6 +217,16 @@ const EVIDENCE_TARGET_KEY: Readonly<
 
 type RcaView = 'chain' | 'fishbone';
 
+/**
+ * Nothing more can be written to an analysis in one of these three states, and
+ * `PROBLEM_ANALYSIS_TRANSITIONS` gives all three nowhere to go. They are the
+ * states in which the workshop MUST offer another door, and the same predicate
+ * greys the editors and renders that door so the two cannot drift apart.
+ */
+function isWorkshopClosed(state: ProblemAnalysisState): boolean {
+  return state === 'concluded' || state === 'superseded' || state === 'abandoned';
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // Time helpers for the two datetime inputs on this page
 // ═════════════════════════════════════════════════════════════════════════════
@@ -230,6 +251,26 @@ function fromLocalInput(value: string | null): string | null {
 
 function evidenceCountOf(cause: ProblemCause): number {
   return cause.evidenceCount ?? cause.evidence?.length ?? 0;
+}
+
+/**
+ * The current row a 409 carries, for the two version domains `problemConflictOf`
+ * does not know about (HARD RULE 7).
+ *
+ * `problemConflictOf` types its answer as the problem folder, so the workshop
+ * cannot use it for `problem_analyses.row_version` or `problem_causes.row_version`
+ * — and dropping the payload there is not a cosmetic loss. The stale version
+ * stays in state, so the NEXT save on that node sends the same base version and
+ * 409s again, and again: the node becomes permanently unsaveable until a full
+ * reload. Rebasing on the server's row is what makes the retry land.
+ *
+ * One function for both domains rather than one per caller: the envelope is the
+ * same, and the copy that drifts is always the one nobody reads.
+ */
+function conflictCurrentOf<T>(error: unknown): T | null {
+  const payload = (error as { payload?: Record<string, unknown> })?.payload;
+  const current = payload?.current;
+  return current === undefined || current === null ? null : (current as T);
 }
 
 function toSnapshot(cause: ProblemCause): AnalysisCauseSnapshot {
@@ -646,8 +687,7 @@ function RcaWorkshop({
 
   const causes = analysis?.causes ?? [];
   const snapshots = useMemo(() => causes.map(toSnapshot), [causes]);
-  const editable = analysis !== null && canWrite && analysis.state !== 'concluded' &&
-    analysis.state !== 'superseded' && analysis.state !== 'abandoned';
+  const editable = analysis !== null && canWrite && !isWorkshopClosed(analysis.state);
 
   /** What is still missing before this analysis could be concluded. */
   const concludeGate = useMemo(
@@ -690,6 +730,10 @@ function RcaWorkshop({
       setConcluding(false);
       onReload();
     } catch (error) {
+      // Same rebase as the autosaves: without it the button carries the stale
+      // version for ever and the analysis can never leave its state again.
+      const current = conflictCurrentOf<ProblemAnalysisWithCauses>(error);
+      if (current) onAnalysisChanged(current);
       toast.error(errorMessage(error, t('problem.analysisStateFailed', 'The analysis could not change state.')));
     } finally {
       setBusy(false);
@@ -710,7 +754,13 @@ function RcaWorkshop({
       });
       onAnalysisChanged(next);
     } catch (error) {
-      // Rethrown so the inline field keeps the draft and prints the reason.
+      // HARD RULE 7: a 409 carries the row as it now stands, and the workshop
+      // takes it. The field then shows the other facilitator's text with the
+      // server's own message on it, and the next save carries a version the
+      // server will accept instead of retrying a losing one for ever.
+      const current = conflictCurrentOf<ProblemAnalysisWithCauses>(error);
+      if (current) onAnalysisChanged(current);
+      // Rethrown so the inline field prints the reason where it happened.
       throw new Error(errorMessage(error, t('problem.analysisSaveFailed', 'Saving failed.')));
     }
   }
@@ -743,6 +793,9 @@ function RcaWorkshop({
       });
       onCauseChanged(next);
     } catch (error) {
+      // The node's own version domain, rebased for the same reason.
+      const current = conflictCurrentOf<ProblemCause>(error);
+      if (current) onCauseChanged(current);
       throw new Error(errorMessage(error, t('problem.causeSaveFailed', 'Saving failed.')));
     }
   }
@@ -798,7 +851,39 @@ function RcaWorkshop({
     );
   }
 
-  const targets = PROBLEM_ANALYSIS_TRANSITIONS[analysis.state] ?? [];
+  /**
+   * The moves the state bar offers, which are NOT every move the machine
+   * declares.
+   *
+   * `superseded` is filtered out. The shared machine lists it as the one target
+   * of `concluded`, but its own comment says it "is reached only when a NEW
+   * analysis becomes current": it is the machine's word for "something took
+   * over", not a decision an agent makes. Rendered as a button it sits next to
+   * "Open a new analysis" and does half of it — the current analysis is dropped
+   * and no new one is opened — after which the problem has no current analysis,
+   * `evaluateKnownErrorPublication` blocks publication for ever on
+   * `known_error_needs_conclusion`, and nothing on this page can undo it.
+   * Opening a new analysis is the supported way to reach `superseded`, and the
+   * server supersedes the current one itself.
+   */
+  const targets = (PROBLEM_ANALYSIS_TRANSITIONS[analysis.state] ?? []).filter(
+    (target) => target !== 'superseded',
+  );
+
+  /**
+   * Whether this problem still has an analysis somebody could write in. It is
+   * the guard on the door below: opening a new analysis SUPERSEDES the current
+   * one, so offering that while browsing an old superseded analysis would let
+   * one click bury a draft the team is in the middle of.
+   */
+  const hasLiveAnalysis = analyses.some(
+    (entry) => entry.isCurrent && !isWorkshopClosed(entry.state),
+  );
+
+  // `abandoned` stays offered as a target — a facilitator may genuinely drop a
+  // dead end — because the way back out is now rendered whenever nothing
+  // writable is left, whatever closed the workshop.
+  const workshopClosed = isWorkshopClosed(analysis.state) && !hasLiveAnalysis;
 
   return (
     <section className="rounded-card bg-bg-secondary p-5 shadow-card">
@@ -964,7 +1049,7 @@ function RcaWorkshop({
       )}
 
       {/* ── State bar ──────────────────────────────────────────────────── */}
-      {canWrite && targets.length > 0 && (
+      {canWrite && (targets.length > 0 || workshopClosed) && (
         <div className="mt-4 flex flex-wrap items-center gap-2">
           {targets.map((target) => {
             const gate = evaluateAnalysisTransition({
@@ -997,17 +1082,29 @@ function RcaWorkshop({
             );
           })}
 
-          {analysis.state === 'concluded' && (
+          {/* The only door out of a closed workshop, offered for all three
+              closed states rather than for `concluded` alone: an abandoned or
+              superseded analysis has no transition left either, and while this
+              button hung on `concluded` a single Abandon click left the RCA and
+              the known error unreachable for good. */}
+          {workshopClosed && (
             <Button
               size="sm"
               variant="ghost"
               icon={<Plus size={13} />}
               loading={busy}
               onClick={() => void startAnalysis()}
-              title={t(
-                'problem.newAnalysisHint',
-                'The current analysis is kept exactly as it was concluded and marked superseded.',
-              )}
+              title={
+                analysis.state === 'concluded'
+                  ? t(
+                      'problem.newAnalysisHint',
+                      'The current analysis is kept exactly as it was concluded and marked superseded.',
+                    )
+                  : t(
+                      'problem.reopenAnalysisHint',
+                      'This analysis is finished and cannot be edited again. A new one starts empty and this one is kept exactly as it stands.',
+                    )
+              }
             >
               {t('problem.newAnalysis', 'Open a new analysis')}
             </Button>
@@ -1032,6 +1129,12 @@ function RcaWorkshop({
         onConfirmed={(next) => {
           onCauseChanged(next);
           setConfirming(null);
+        }}
+        onRebase={(next) => {
+          // The modal holds its own copy of the node, so a 409 has to land in
+          // both places or Apply keeps sending the version that just lost.
+          onCauseChanged(next);
+          setConfirming(next);
         }}
       />
 
@@ -1424,12 +1527,15 @@ function ConfirmCauseModal({
   actor,
   onClose,
   onConfirmed,
+  onRebase,
 }: {
   problemTicketId: number;
   cause: ProblemCause | null;
   actor: ProblemActorContext;
   onClose: () => void;
   onConfirmed: (next: ProblemCause) => void;
+  /** The row a 409 came back with (HARD RULE 7). Not a success. */
+  onRebase: (current: ProblemCause) => void;
 }): JSX.Element {
   const { t } = useTranslation();
   const session = useAuthStore((state) => state.session);
@@ -1471,6 +1577,8 @@ function ConfirmCauseModal({
       });
       onConfirmed(next);
     } catch (error) {
+      const current = conflictCurrentOf<ProblemCause>(error);
+      if (current) onRebase(current);
       toast.error(errorMessage(error, t('problem.confirmFailed', 'The confidence could not be changed.')));
     } finally {
       setBusy(false);
@@ -1719,11 +1827,57 @@ function IncidentPanel({
   const [busy, setBusy] = useState(false);
   const [confirmCascade, setConfirmCascade] = useState(false);
 
+  const [serverPlan, setServerPlan] = useState<CascadePlan | null>(null);
+  const [planUnreadable, setPlanUnreadable] = useState(false);
+
   const policy = previewPolicy ?? problem.closurePolicy;
 
-  // The exact function the server runs on resolution. Computing it here means
-  // the preview cannot disagree with what the cascade will actually do.
-  const plan = useMemo(() => planClosureCascade(incidents, policy), [incidents, policy]);
+  // The rows on screen, classified by the exact function the server runs. This
+  // is honest about what it covers and nothing more: `GET /incidents` is
+  // PAGINATED, so `incidents` is one page and a count taken from it counts a
+  // slice. It decides what each visible row says, never a total.
+  const pagePlan = useMemo(() => planClosureCascade(incidents, policy), [incidents, policy]);
+
+  /**
+   * The plan over EVERY linked incident, from the server's own dry run.
+   *
+   * `POST /cascade` acts on all of them, so the figure an operator approves has
+   * to come from all of them; a confirm dialog promising 31 transitions while
+   * the pass performs 74 is worse than no dialog. The endpoint writes nothing
+   * and logs nothing, and runs the same `planClosureCascade` this file imports,
+   * so the two still cannot disagree on arithmetic — only the population
+   * differs, and the server's is the one that acts.
+   *
+   * Re-read when the policy select moves (the operator is comparing outcomes)
+   * and when `incidents` is replaced, which is what a link, an unlink or a
+   * finished cascade does through `onReload`.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    // Dropped BEFORE the request, never after it: a plan computed for the
+    // policy the operator has just moved off is precisely the stale figure this
+    // whole arrangement exists to keep out of the confirm dialog.
+    setServerPlan(null);
+    setPlanUnreadable(false);
+    problemsApi
+      .previewCascade(problemTicketId, policy)
+      .then((result) => {
+        if (!cancelled) setServerPlan(result.plan);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setServerPlan(null);
+        setPlanUnreadable(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [problemTicketId, policy, incidents]);
+
+  // Counts come from the whole population when it is known. Until it is, the
+  // page plan keeps the tiles populated, the scope line stays off and the
+  // cascade button stays disabled, so nothing quotes a slice as a total.
+  const plan = serverPlan ?? pagePlan;
 
   const byTicket = useMemo(() => {
     const map = new Map<number, CascadeIncidentSnapshot>();
@@ -1816,11 +1970,28 @@ function IncidentPanel({
       </div>
 
       {/* ── The plan, before anybody clicks ────────────────────────────── */}
-      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+      {/* Dimmed while the counts are the page's own rather than the whole
+          population's: provisional figures should not look settled. */}
+      <div
+        className={clsx(
+          'mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4 transition-opacity',
+          serverPlan === null && 'opacity-60',
+        )}
+      >
         <PlanTile value={plan.willResolve} tone="ok" label={t('problem.plan.willResolve', 'Will be resolved')} />
         <PlanTile value={plan.blocked} tone="warn" label={t('problem.plan.needsHuman', 'Needs a human')} />
         <PlanTile value={plan.workedNotWaiting} tone="neutral" label={t('problem.plan.worked', 'Worked, nobody waiting')} />
-        <PlanTile value={plan.skippedTerminal} tone="muted" label={t('problem.plan.alreadyClosed', 'Already closed')} />
+        {/* The bucket's own label, not a second wording of it: an incident an
+            agent resolved himself lands here too, so "Already closed" would be
+            wrong on exactly the rows the pill below already names correctly. */}
+        <PlanTile
+          value={plan.skippedTerminal}
+          tone="muted"
+          label={t(
+            CASCADE_BUCKET_LABELS.skipped_terminal.key,
+            CASCADE_BUCKET_LABELS.skipped_terminal.fallback,
+          )}
+        />
       </div>
 
       <p className="mt-2 text-[11px] leading-snug text-text-muted">
@@ -1829,6 +2000,29 @@ function IncidentPanel({
           'The cascade resolves; it never closes. A resolved incident stays reopenable and the requester can still object.',
         )}
       </p>
+
+      {/* What the tiles above cover, said out loud whenever the list is short
+          of the population. Without it the four figures read as a census of
+          the rows underneath them, which they deliberately are not. */}
+      {serverPlan !== null && serverPlan.total > incidents.length && (
+        <p className="mt-2 text-[11px] leading-snug text-text-muted">
+          {t(
+            'problem.planScope',
+            'Counted over all {{total}} linked incidents; the list below shows the first {{shown}}.',
+            { total: serverPlan.total, shown: incidents.length },
+          )}
+        </p>
+      )}
+
+      {planUnreadable && (
+        <p className="mt-2 flex items-start gap-1.5 rounded-card bg-sla-warn-bg px-2.5 py-1.5 text-[11px] leading-snug text-sla-warn">
+          <AlertTriangle size={12} className="mt-0.5 shrink-0" aria-hidden />
+          {t(
+            'problem.planUnavailable',
+            'The full plan could not be read, so these counts cover only the incidents listed below. Reload before running the cascade.',
+          )}
+        </p>
+      )}
 
       {plan.truncated && (
         <p className="mt-2 flex items-start gap-1.5 rounded-card bg-sla-warn-bg px-2.5 py-1.5 text-[11px] leading-snug text-sla-warn">
@@ -1846,10 +2040,14 @@ function IncidentPanel({
         </p>
       ) : (
         <ul className="mt-3 flex flex-col gap-1.5">
-          {plan.classifications.map((entry) => {
+          {/* The page's own classification: one entry per row actually on
+              screen. The server's plan covers more incidents than this list
+              has rows, so it can only answer the counters above. */}
+          {pagePlan.classifications.map((entry) => {
             const incident = byTicket.get(entry.ticketId);
             if (!incident) return null;
             const bucket = CASCADE_BUCKET_LABELS[entry.bucket];
+            const category = statusCategoryLabel(incident.statusCategory);
             return (
               <li
                 key={entry.ticketId}
@@ -1862,7 +2060,17 @@ function IncidentPanel({
                   {incident.number}
                 </Link>
 
-                <StatusPill statusSlug="" category={incident.statusCategory} size="sm" />
+                {/* The snapshot now carries the status the operator reads, so
+                    the chip says what every other screen says. The category
+                    still decides the colour (HARD RULE 5); it only stopped
+                    deciding the words. Falling back to the slug is the same
+                    thing ContextRail does when no configured label is joined. */}
+                <StatusPill
+                  statusSlug={incident.statusSlug}
+                  category={incident.statusCategory}
+                  label={incident.statusSlug || t(category.key, category.fallback)}
+                  size="sm"
+                />
 
                 <span
                   className={clsx(
@@ -1917,16 +2125,25 @@ function IncidentPanel({
 
           <span className="flex-1" />
 
+          {/* No approving a figure the page has not got: until the server's
+              plan is in, the operator would be confirming the slice. */}
           <Button
             size="sm"
             variant="secondary"
             icon={<Wrench size={14} />}
-            disabled={plan.willResolve === 0 && plan.willNotify === 0}
+            disabled={serverPlan === null || (plan.willResolve === 0 && plan.willNotify === 0)}
             onClick={() => setConfirmCascade(true)}
-            title={t(
-              'problem.runCascadeHint',
-              'The cascade also runs on its own when the problem moves to a resolved status.',
-            )}
+            title={
+              serverPlan === null
+                ? t(
+                    'problem.runCascadePending',
+                    'The plan over every linked incident is not readable yet. The cascade acts on all of them, not only on the ones listed here.',
+                  )
+                : t(
+                    'problem.runCascadeHint',
+                    'The cascade also runs on its own when the problem moves to a resolved status.',
+                  )
+            }
           >
             {t('problem.runCascade', 'Run the cascade now')}
           </Button>

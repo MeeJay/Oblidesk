@@ -159,7 +159,9 @@ export type ProblemLinkSource = (typeof PROBLEM_LINK_SOURCES)[number];
 /**
  * One pass, four buckets, every linked incident in exactly one of them.
  *
- *   skipped_terminal        already resolved / closed / cancelled. Nothing to do.
+ *   skipped_terminal        already resolved / closed / cancelled — the cascade
+ *                           has nothing to do, `resolved` included: it is the
+ *                           category the cascade aims at.
  *   blocked_human_waiting   THE hard guard. Never resolved automatically.
  *   auto_resolved           no agent journal entry, no logged time.
  *   worked_not_waiting      a human worked it, but nobody is waiting on us.
@@ -328,7 +330,12 @@ export const PROBLEM_CANDIDATE_STATE_LABELS: Readonly<
 };
 
 export const CASCADE_BUCKET_LABELS: Readonly<Record<CascadeBucket, ProblemLabel>> = {
-  skipped_terminal: { key: 'problem.cascadeBucket.skippedTerminal', fallback: 'Already closed' },
+  // "Already closed" would be a lie on the incidents an agent resolved himself,
+  // which land here too: the bucket is "nothing to do", not "closed".
+  skipped_terminal: {
+    key: 'problem.cascadeBucket.skippedTerminal',
+    fallback: 'Already resolved or closed',
+  },
   blocked_human_waiting: {
     key: 'problem.cascadeBucket.blockedHumanWaiting',
     fallback: 'Needs a human',
@@ -1270,6 +1277,14 @@ export interface CascadeIncidentSnapshot {
   number: string;
   /** HARD RULE 5 — the classifier keys off the category, never off a slug. */
   statusCategory: StatusCategory;
+  /**
+   * What the operator READS on the pill. The category decides everything the
+   * engine does and everything the pill looks like; the slug decides only what
+   * it says. Without it the panel had to write the category name into the
+   * label, so a tenant who renamed "Pending" to "Waiting on customer" still saw
+   * "pending_requester" on this one screen and nowhere else.
+   */
+  statusSlug: string;
   rowVersion: number;
   firstResponseAt: string | null;
   /** Who wrote the last PUBLIC reply. null when there is none. */
@@ -1300,6 +1315,29 @@ export interface CascadeClassificationInput {
 }
 
 /**
+ * Nothing left for the cascade to do with this incident.
+ *
+ * Terminal is NOT the right test on its own. `resolved` is deliberately not
+ * terminal (the requester can still push back, the auto-close job has not run),
+ * yet it is exactly where the cascade would move the ticket: an incident an
+ * agent already resolved, with their own resolution code and write-up, is
+ * finished as far as this pass is concerned. Keying on `isTerminal` alone made
+ * the pass re-target it, and both outcomes were wrong. On a state machine with
+ * an arc back into `resolved` the transition succeeds and overwrites the
+ * agent's resolution code and note with the cascade's; on the shipped machine,
+ * which has no such arc, it is refused and the incident collects a
+ * `transition_refused` row in its Why drawer claiming the workflow blocked a
+ * move that never should have been attempted. A row asserting what did not
+ * happen is worse than no row (HARD RULE 2).
+ *
+ * So the test is the category the cascade AIMS at, plus the categories past it.
+ * HARD RULE 5 throughout: category, never a slug.
+ */
+function cascadeHasNothingToDo(category: StatusCategory): boolean {
+  return category === CASCADE_TARGET_CATEGORY || isTerminal(category);
+}
+
+/**
  * Put one incident in exactly one bucket.
  *
  * The block reasons are tested in DECREASING order of how damning the mistake
@@ -1322,7 +1360,7 @@ export function classifyCascadeIncident(
   const { incident, policy } = input;
   const ticketId = incident.ticketId;
 
-  if (isTerminal(incident.statusCategory)) {
+  if (cascadeHasNothingToDo(incident.statusCategory)) {
     return { ticketId, bucket: 'skipped_terminal', blockReason: null, resolves: false, notifies: false };
   }
 
@@ -1373,7 +1411,11 @@ export interface CascadePlan {
   total: number;
   /** Every incident, in the order supplied. */
   classifications: CascadeClassification[];
-  /** The prefix the pass will actually act on, capped by `maxIncidents`. */
+  /**
+   * What this pass takes on: every entry needing an action, up to `maxIncidents`
+   * of them, plus the `skipped_terminal` entries, which need none and therefore
+   * spend no budget. The counters below are computed over this list.
+   */
   actionable: CascadeClassification[];
   skippedTerminal: number;
   autoResolved: number;
@@ -1382,8 +1424,9 @@ export interface CascadePlan {
   blockedByReason: Partial<Record<CascadeBlockReason, number>>;
   willResolve: number;
   willNotify: number;
-  /** True when the cap bit. The caller MUST surface this. */
+  /** True when the cap bit and work was deferred. The caller MUST surface this. */
   truncated: boolean;
+  /** Incidents needing an action that this pass left for the next one. */
   remaining: number;
 }
 
@@ -1398,6 +1441,19 @@ export interface CascadePlan {
  * Volume: the pass acts on at most `maxIncidents` (default
  * `LIMITS.problemCascadeMaxIncidents`) and reports the remainder. A truncation
  * that looks like a completion is the failure nobody catches.
+ *
+ * The cap bounds the WORK, not the reading, and that distinction is the whole
+ * difference between a queue that drains and one that is walled off. The
+ * snapshot list arrives ordered by ticket id and never advances: there is no
+ * cursor, no resume, and closing an incident does not unlink it. Cutting a
+ * plain prefix therefore hands the same slice back on every pass, so a problem
+ * that accumulated more than `maxIncidents` links over the years would see its
+ * live tail permanently out of reach — worst case, a thousand incidents already
+ * finished eat the entire budget and the pass does nothing, for ever. An entry
+ * the pass has nothing to do with costs no transition, no journal note and no
+ * decision row, so it rides along free and the budget is spent only on entries
+ * that ask for an action. What the budget could not take is `remaining`, and
+ * `truncated` says so.
  */
 export function planClosureCascade(
   incidents: readonly CascadeIncidentSnapshot[],
@@ -1408,7 +1464,22 @@ export function planClosureCascade(
   const classifications = incidents.map((incident) =>
     classifyCascadeIncident({ incident, policy, now: options?.now }),
   );
-  const actionable = cap > 0 ? classifications.slice(0, cap) : [];
+
+  const actionable: CascadeClassification[] = [];
+  let budget = cap > 0 ? cap : 0;
+  let deferred = 0;
+  for (const entry of classifications) {
+    if (entry.bucket === 'skipped_terminal') {
+      // Free: the acting loop skips it, and keeping it here is what lets the
+      // census still count what it looked at.
+      actionable.push(entry);
+    } else if (budget > 0) {
+      actionable.push(entry);
+      budget -= 1;
+    } else {
+      deferred += 1;
+    }
+  }
 
   const blockedByReason: Partial<Record<CascadeBlockReason, number>> = {};
   let skippedTerminal = 0;
@@ -1453,8 +1524,8 @@ export function planClosureCascade(
     blockedByReason,
     willResolve,
     willNotify,
-    truncated: classifications.length > actionable.length,
-    remaining: classifications.length - actionable.length,
+    truncated: deferred > 0,
+    remaining: deferred,
   };
 }
 
@@ -1778,12 +1849,26 @@ export interface ProblemDetectionRunOutcome {
 // The shipped detector body
 // ═════════════════════════════════════════════════════════════════════════════
 
-/** Slug of the seeded `problem_detection` config object (`is_system`). */
+/**
+ * Slug the detector looks for. NOT seeded, and that is deliberate: nothing
+ * writes a `problem_detection` object, so a tenant that has never opened the
+ * screen runs on the built-in body below. Creating an object under this slug in
+ * Admin -> Configuration overrides it, which is how every other engine here is
+ * tuned (HARD RULE 3 — the reference is the slug, never an id).
+ *
+ * The doc used to call this "the seeded config object". It never was, and a
+ * comment that describes a row nobody writes sends the next reader looking for
+ * a seed bug that does not exist.
+ */
 export const PROBLEM_DETECTION_DEFAULT_SLUG = 'default';
 
 /**
- * The baseline the seed writes and the detector falls back to when the tenant
- * archived its object. Weights are chosen so the arithmetic in
+ * The body the detector runs on until a tenant writes its own. It is compiled
+ * in rather than seeded, so a fresh install detects recurrences on day one
+ * without anybody configuring anything, and `loadDetector` returns it whenever
+ * no published object exists under `PROBLEM_DETECTION_DEFAULT_SLUG`.
+ *
+ * Weights are chosen so the arithmetic in
  * `scoreProblemCandidate` holds; changing one changes which cards appear, so
  * change it there and re-read the four worked numbers in that comment.
  */

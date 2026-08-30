@@ -58,6 +58,9 @@ import {
   PAGINATION,
   PROBLEM_DECISIONS,
   PROBLEM_LINK_KIND,
+  ROOMS,
+  SOCKET_EVENTS,
+  classifyCascadeIncident,
   evaluateAnalysisTransition,
   evaluateCauseConfirmation,
   evaluateKnownErrorPublication,
@@ -69,6 +72,7 @@ import {
   type AnalysisCauseSnapshot,
   type Capability,
   type CascadeBlockReason,
+  type CascadeClassification,
   type CascadeIncidentSnapshot,
   type ChangeProblemAnalysisStateRequest,
   type ConfirmProblemCauseRequest,
@@ -113,6 +117,7 @@ import {
   type UpdateProblemRequest,
   type VerifyWorkaroundRequest,
   type WorkaroundRisk,
+  OPEN_STATUS_CATEGORIES,
 } from '@oblidesk/shared';
 
 import { db, insertScoped, scoped, assertTenantId, type Executor } from '../db';
@@ -120,7 +125,15 @@ import { AppError } from '../middleware/errorHandler';
 import { withDecision } from './decision.service';
 import * as journalService from './journal.service';
 import * as ticketService from './ticket.service';
-import { loadStateMachineForTicket, statusForCategory } from './stateMachine.service';
+import * as slaService from './sla.service';
+import {
+  evaluateTransition,
+  loadRequiredWhenFields,
+  loadStateMachineForTicket,
+  statusForCategory,
+  type NormalizedStateMachine,
+  type RequiredWhenField,
+} from './stateMachine.service';
 import { normalizeQuery, TS_CONFIG } from './search.service';
 import { logger } from '../utils/logger';
 
@@ -704,6 +717,47 @@ function inTransaction<T>(trx: Knex.Transaction | undefined, fn: (tx: Knex.Trans
   return trx ? fn(trx) : db.transaction(fn);
 }
 
+/** The outermost transaction: a savepoint releases long before the real commit. */
+function rootTransaction(tx: Knex.Transaction): Knex.Transaction {
+  let current = tx;
+  while (current.parentTransaction) current = current.parentTransaction;
+  return current;
+}
+
+/**
+ * Send a realtime frame once the transaction it belongs to has COMMITTED.
+ *
+ * A frame emitted from inside the transaction announces a row nobody else can
+ * read yet, and one emitted from a transaction that then rolls back announces
+ * something that never happened. `ticket.service` answers this for its own
+ * writes by emitting only when it owns the transaction (`if (!trx)
+ * emitTicketCreated(...)`) and states that the event is otherwise the owner's
+ * to send. This module IS that other owner — it creates the promoted ticket and
+ * transitions every incident the cascade touches — and it never sent one, so
+ * a pass that resolved a thousand incidents reached no other client at all.
+ *
+ * Knex settles `executionPromise` when the transaction completes, so the frame
+ * rides on the real commit whether the transaction was opened here or handed
+ * down by `ticket.service`'s transition hook. A rollback rejects it, and a
+ * rollback is precisely the case where there is nothing to announce.
+ */
+function afterCommit(tx: Knex.Transaction, send: () => void): void {
+  void rootTransaction(tx).executionPromise.then(
+    () => {
+      // `emitDeskEvent` already swallows socket failures; this catches a
+      // payload built from something that moved under us.
+      try {
+        send();
+      } catch (error) {
+        logger.warn({ err: error }, 'Problem module: post-commit realtime frame dropped');
+      }
+    },
+    () => {
+      /* rolled back — nothing happened, so nothing is announced */
+    },
+  );
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // SECTION 4 — Reading
 // ═════════════════════════════════════════════════════════════════════════════
@@ -988,6 +1042,37 @@ export async function promote(
       tx,
     );
 
+    // ── The clock nobody could ever stop ───────────────────────────────────
+    //
+    // `create()` runs the SLA engine, and that engine knows nothing about
+    // problems: the shipped catch-all policy applies to every record type, so a
+    // promotion arms a `response` clock whose stop condition is
+    // `ticket.first_public_reply`. A problem file has no requester and no reply
+    // composer — nobody can ever satisfy it — so the clock only ever breaches,
+    // hours after each promotion, mailing the whole assignment group and
+    // parking an investigation in the `breaching_soon` view next to real
+    // incidents.
+    //
+    // So every clock the creation armed is stopped here, in the SAME
+    // transaction that armed it. All of them, not only the response target: the
+    // engine exposes no per-target cancel, and a resolution deadline computed
+    // from an incident policy means no more on an investigation record than the
+    // response one does. The exception is a policy the tenant bound to a RECORD
+    // TYPE: naming `problem` in a policy is asking for those clocks
+    // deliberately, and this module does not get to overrule a tenant's own
+    // configuration. Either way `cancelForTicket` writes its own
+    // `sla_clocks_cancelled` row, so the Why drawer explains it (HARD RULE 2).
+    const slaResolution = await slaService.resolvePolicy(tenantId, problemTicket, tx);
+    if (slaResolution.winner !== null && slaResolution.winner.level !== 'record_type') {
+      await slaService.cancelForTicket({
+        tenantId,
+        ticketId: problemTicket.id,
+        reasonCode: 'problem_record_has_no_requester',
+        actorId: actor.userId ?? null,
+        trx: tx,
+      });
+    }
+
     const inserted = (await insertScoped(
       'problems',
       tenantId,
@@ -1021,7 +1106,7 @@ export async function promote(
       );
     }
 
-    await ticketService.addLink(
+    await ticketService.addProblemLink(
       tenantId,
       actor,
       incident.id,
@@ -1069,6 +1154,11 @@ export async function promote(
       );
     }
 
+    // `create()` emits nothing when it is handed a transaction, and this one
+    // always hands it one. Without this the new problem exists for its author
+    // alone until every other desk reloads the page.
+    afterCommit(tx, () => ticketService.emitTicketCreated(tenantId, problemTicket));
+
     return requireProblem(tenantId, problemTicket.id, tx);
   });
 }
@@ -1107,19 +1197,64 @@ export async function promote(
  * of whichever was fixed first would resolve it while the other was still open
  * and still hurting it. That is the exact failure the guard exists to prevent.
  */
+/**
+ * THE anti-double-link query: which problems already hold these incidents.
+ *
+ * Exported because `problemDetection` was carrying a second spelling of it,
+ * written locally only because that agent could not edit this file. A guard
+ * duplicated across two services is a guard that drifts, and this one decides
+ * whether an incident can end up under two problems and be auto-resolved by
+ * whichever is fixed first. One implementation, both callers.
+ *
+ * `liveOnly` separates the two questions the callers actually ask:
+ *   false — may this incident be linked at all? Category plays no part: an
+ *           incident cannot hang under two problems whatever state they are in.
+ *   true  — is a LIVE problem already carrying this signal? A key that comes
+ *           back weeks after its problem closed is a new problem, not a
+ *           duplicate (HARD RULE 5 — the category decides, never the slug).
+ */
+export async function problemsHoldingIncidents(
+  tenantId: number,
+  incidentIds: readonly number[],
+  opts: { liveOnly: boolean },
+  executor: Executor,
+): Promise<Map<number, number[]>> {
+  const out = new Map<number, number[]>();
+  if (incidentIds.length === 0) return out;
+
+  const qb = scoped('ticket_link', tenantId, executor)
+    .whereIn('ticket_link.from_ticket_id', [...incidentIds])
+    .where('ticket_link.kind', PROBLEM_LINK_KIND)
+    .join({ pt: 'tickets' }, 'pt.id', 'ticket_link.to_ticket_id')
+    .where('pt.tenant_id', tenantId)
+    .where('pt.record_type', 'problem')
+    .whereNull('pt.deleted_at');
+  if (opts.liveOnly) void qb.whereIn('pt.status_category', [...OPEN_STATUS_CATEGORIES]);
+
+  const rows = (await qb.select(
+    'ticket_link.from_ticket_id',
+    'ticket_link.to_ticket_id',
+  )) as unknown as Array<Record<string, unknown>>;
+
+  for (const row of rows) {
+    const incidentId = Number(row.from_ticket_id);
+    const problemTicketId = Number(row.to_ticket_id);
+    if (!Number.isInteger(incidentId) || !Number.isInteger(problemTicketId)) continue;
+    const bucket = out.get(incidentId);
+    if (bucket) bucket.push(problemTicketId);
+    else out.set(incidentId, [problemTicketId]);
+  }
+  return out;
+}
+
+/** The single-incident spelling `promote` and `linkIncidents` read. */
 async function problemsLinkedTo(
   tenantId: number,
   incidentId: number,
   tx: Executor,
 ): Promise<Array<{ to_ticket_id: number }>> {
-  return (await scoped('ticket_link', tenantId, tx)
-    .join('tickets as other', 'other.id', 'ticket_link.to_ticket_id')
-    .where('other.tenant_id', tenantId)
-    .where('ticket_link.from_ticket_id', incidentId)
-    .where('ticket_link.kind', PROBLEM_LINK_KIND)
-    .where('other.record_type', 'problem')
-    .whereNull('other.deleted_at')
-    .select('ticket_link.to_ticket_id')) as unknown as Array<{ to_ticket_id: number }>;
+  const held = await problemsHoldingIncidents(tenantId, [incidentId], { liveOnly: false }, tx);
+  return (held.get(incidentId) ?? []).map((id) => ({ to_ticket_id: id }));
 }
 
 export async function linkIncidents(
@@ -1177,7 +1312,7 @@ export async function linkIncidents(
         continue;
       }
 
-      await ticketService.addLink(
+      await ticketService.addProblemLink(
         tenantId,
         actor,
         incidentId,
@@ -1544,6 +1679,11 @@ export async function retireKnownError(
  * pushed verbatim to the portal, is a data leak wearing a feature badge.
  * Rewriting it for the public is an editorial act by a human, and the two rows
  * are never synchronised afterwards, in either direction.
+ *
+ * ONCE is the operative word, and the gate below is what makes it survivable:
+ * the slot can only be filled from a published known error that has something
+ * to say. The client already renders the button on that condition alone, so
+ * this is the server saying the same thing rather than a second opinion.
  */
 export async function publishToKb(
   tenantId: number,
@@ -1570,6 +1710,34 @@ export async function publishToKb(
       });
     }
 
+    // ── The gate the one-shot slot demands ────────────────────────────────
+    //
+    // `kb_article_id` is set once and never cleared: not by this service, not
+    // by `updateProblemSchema`, and there is no KB route to delete the article
+    // and free it. Seeding from a problem still in RCA therefore burns the slot
+    // for good, and with `symptoms_md` and `workaround_md` both still empty it
+    // burns it on an article with no body at all. Three weeks later, when the
+    // workaround is written and the known error finally published, the seeding
+    // that mattered is refused by a permanent 409.
+    //
+    // So the two facts the article is made of are demanded before it is
+    // written, in words, through the same blocker shape the publication gate
+    // uses (HARD RULE 12 — the refusal reads like the button's tooltip).
+    if (row.known_error_state !== 'published') {
+      throw new ProblemGateError('This known error is not published', {
+        allowed: false,
+        missingCapabilities: [],
+        blockers: [
+          {
+            code: 'known_error_not_published',
+            key: 'problem.knownErrorBlocked.notPublishedForKb',
+            fallback:
+              'Only a published known error can seed an article. The article slot is used once and cannot be freed afterwards.',
+          },
+        ],
+      });
+    }
+
     const header = await loadTicketHeader(tenantId, problemTicketId, tx);
     if (!header) throw new AppError(404, 'Problem ticket not found', { code: 'not_found' });
 
@@ -1584,6 +1752,21 @@ export async function publishToKb(
       ]
         .filter((section): section is string => section !== null)
         .join('\n\n');
+
+    if (blank(bodyMd)) {
+      throw new ProblemGateError('This known error has nothing to publish', {
+        allowed: false,
+        missingCapabilities: [],
+        blockers: [
+          {
+            code: 'known_error_empty_article',
+            key: 'problem.knownErrorBlocked.emptyArticle',
+            fallback:
+              'Write the symptoms or the workaround first. An empty article would take the only slot this problem has.',
+          },
+        ],
+      });
+    }
 
     const inserted = (await insertScoped(
       'kb_articles',
@@ -1664,6 +1847,71 @@ export async function listAnalyses(
  * `problem_analyses_current_uq` (partial unique on `is_current`) is what makes
  * the flip safe under concurrency.
  */
+/**
+ * Prove that a child id named in a URL belongs to the problem named in the same
+ * URL.
+ *
+ * Every child route parses `:ticketId` and then addresses the child by its own
+ * id, so `PATCH /api/problems/5/causes/99` happily edited cause 99 even when it
+ * hung under problem 7. There is no cross-tenant leak — every read goes through
+ * `scoped()` (HARD RULE 1) — but an agent could still edit another problem's
+ * analysis through a hand-made URL, and the audit trail would name the wrong
+ * problem. The path says what is being edited; it has to be true.
+ *
+ * Answered with one query per child kind, walking back up to the owning
+ * problem, so the check cannot drift from the schema that defines the edges.
+ */
+export async function assertChildOfProblem(
+  tenantId: number,
+  problemTicketId: number,
+  child: { analysisId?: number; causeId?: number; evidenceId?: number; signatureId?: number },
+  executor: Executor = db,
+): Promise<void> {
+  assertTenantId(tenantId);
+
+  const mismatch = (): never => {
+    // 404, not 403: the child exists, but not HERE. Saying "forbidden" would
+    // confirm the id is real to somebody probing for other problems' trees.
+    throw new AppError(404, 'That record does not belong to this problem', { code: 'not_found' });
+  };
+
+  if (child.analysisId !== undefined) {
+    const row = (await scoped('problem_analyses', tenantId, executor)
+      .where('problem_analyses.id', child.analysisId)
+      .first('problem_analyses.problem_ticket_id')) as { problem_ticket_id: number } | undefined;
+    if (!row || Number(row.problem_ticket_id) !== problemTicketId) mismatch();
+  }
+
+  if (child.causeId !== undefined) {
+    const row = (await scoped('problem_causes', tenantId, executor)
+      .join({ pa: 'problem_analyses' }, 'pa.id', 'problem_causes.analysis_id')
+      .where('pa.tenant_id', tenantId)
+      .where('problem_causes.id', child.causeId)
+      .first('pa.problem_ticket_id')) as { problem_ticket_id: number } | undefined;
+    if (!row || Number(row.problem_ticket_id) !== problemTicketId) mismatch();
+  }
+
+  if (child.evidenceId !== undefined) {
+    const row = (await scoped('problem_cause_evidence', tenantId, executor)
+      .join({ pc: 'problem_causes' }, 'pc.id', 'problem_cause_evidence.cause_id')
+      .join({ pa: 'problem_analyses' }, 'pa.id', 'pc.analysis_id')
+      .where('pc.tenant_id', tenantId)
+      .where('pa.tenant_id', tenantId)
+      .where('problem_cause_evidence.id', child.evidenceId)
+      .first('pa.problem_ticket_id')) as { problem_ticket_id: number } | undefined;
+    if (!row || Number(row.problem_ticket_id) !== problemTicketId) mismatch();
+  }
+
+  if (child.signatureId !== undefined) {
+    const row = (await scoped('problem_alert_signatures', tenantId, executor)
+      .where('problem_alert_signatures.id', child.signatureId)
+      .first('problem_alert_signatures.problem_ticket_id')) as
+      | { problem_ticket_id: number }
+      | undefined;
+    if (!row || Number(row.problem_ticket_id) !== problemTicketId) mismatch();
+  }
+}
+
 export async function createAnalysis(
   tenantId: number,
   actor: ActorContext,
@@ -1711,7 +1959,8 @@ export async function createAnalysis(
  * completeness check: `problem_analyses.root_cause_id` deliberately carries no
  * foreign key (see the column comment in migration 006), so electing a node
  * from a different analysis would be a dangling pointer nothing else would ever
- * catch.
+ * catch. CLEARING it on a concluded analysis is refused outright, by the same
+ * guard `deleteCause` uses: see `assertElectedRootStays`.
  */
 export async function updateAnalysis(
   tenantId: number,
@@ -1733,6 +1982,8 @@ export async function updateAnalysis(
     if (input.conclusionMd !== undefined) patch.conclusion_md = input.conclusionMd;
 
     if (input.rootCauseId !== undefined) {
+      // Clearing the election is the one edit a concluded analysis cannot take.
+      if (input.rootCauseId === null) assertElectedRootStays(current);
       if (input.rootCauseId !== null) {
         const owned = await scoped('problem_causes', tenantId, tx)
           .where('problem_causes.id', input.rootCauseId)
@@ -1906,6 +2157,32 @@ function assertAnalysisEditable(row: AnalysisRow): void {
   }
 }
 
+/**
+ * A concluded analysis KEEPS its elected root.
+ *
+ * `problem_analyses_concluded_ck` demands `root_cause_id`, `concluded_at` and
+ * `concluded_by` together, and two paths in this file can clear the first from
+ * the application: `updateAnalysis` with an explicit `rootCauseId: null`, and
+ * `deleteCause` when the doomed subtree CONTAINS the elected root — the
+ * everyday case in a five-whys chain, where the elected node is the deepest one
+ * and every node above it is one of its ancestors. Both ran the UPDATE and let
+ * Postgres answer 23514, which `errorHandler` does not map: an opaque 500 on a
+ * normal action, on precisely the case the code claimed to protect.
+ *
+ * The refusal lives here, once, so the two callers cannot drift. The column
+ * comment in migration 006 justifies having NO foreign key on `root_cause_id`
+ * on the grounds that "the service says no in words rather than the database
+ * saying no as a check violation" — this is that sentence.
+ */
+function assertElectedRootStays(analysis: AnalysisRow): void {
+  if (analysis.state !== 'concluded') return;
+  throw new AppError(
+    422,
+    'A concluded analysis must keep its root cause. Reopen the analysis first.',
+    { code: 'transition_blocked', payload: { analysisId: analysis.id, state: analysis.state } },
+  );
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // SECTION 9 — The cause tree
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1921,7 +2198,20 @@ async function loadCauseRows(
     .select('problem_causes.*')) as unknown as CauseRow[];
 }
 
-/** Ids of a node and everything under it. Walked in memory: an analysis is dozens of nodes. */
+/**
+ * Ids of a node and everything under it. Walked in memory: an analysis is
+ * dozens of nodes.
+ *
+ * The `seen` set is not defensive programming, it is the difference between a
+ * wrong answer and a dead process. `problem_causes_parent_ck` only forbids
+ * SELF-parenting, so a cycle of length two (A's parent is B, B's parent is A)
+ * is a shape the database accepts; `updateCause` refuses to create one, but it
+ * decides on an unlocked read of the tree, so two opposite re-parentings
+ * committing at the same instant produce exactly that. Without the set the walk
+ * pushes A and B at each other for ever, on Node's single thread, until the
+ * worker dies — and it would be triggered by the next ordinary DELETE, not by
+ * whoever caused it.
+ */
 function subtreeIds(rows: readonly CauseRow[], rootId: number): number[] {
   const childrenOf = new Map<number, number[]>();
   for (const row of rows) {
@@ -1932,9 +2222,12 @@ function subtreeIds(rows: readonly CauseRow[], rootId: number): number[] {
   }
 
   const collected: number[] = [];
+  const seen = new Set<number>();
   const stack = [rootId];
   while (stack.length > 0) {
     const id = stack.pop() as number;
+    if (seen.has(id)) continue;
+    seen.add(id);
     collected.push(id);
     for (const child of childrenOf.get(id) ?? []) stack.push(child);
   }
@@ -1957,10 +2250,13 @@ export async function createCause(
 ): Promise<ProblemCause> {
   assertTenantId(tenantId);
 
+  // Born blank on purpose. The canvas creates the node on click and the agent
+  // writes into it after, which is how every other inline field in the desk
+  // behaves (HARD RULE 12). Demanding the sentence here made every "add a why"
+  // button answer 400. The debt is collected at the gate instead:
+  // `evaluateCauseConfirmation` refuses to CONFIRM a cause with no statement,
+  // so an empty node can exist but can never become a root cause.
   const statement = (input.statement ?? '').trim();
-  if (statement === '') {
-    throw new AppError(400, 'A cause needs a statement', { code: 'validation_failed' });
-  }
 
   return inTransaction(trx, async (tx) => {
     const analysis = await loadAnalysisRow(tenantId, analysisId, tx);
@@ -2053,15 +2349,28 @@ export async function updateCause(
   assertTenantId(tenantId);
 
   return inTransaction(trx, async (tx) => {
+    // The ANALYSIS row is locked first, and that ordering is deliberate twice
+    // over. It is locked at all because the cycle test below reads the whole
+    // tree WITHOUT a lock and then decides on it: `problem_causes_parent_ck`
+    // only forbids self-parenting, so two opposite re-parentings evaluated
+    // against the same pre-image both pass and commit a two-node cycle nothing
+    // downstream can walk. It is locked FIRST because `deleteCause` takes the
+    // analysis before its cascade takes the cause rows, and taking them the
+    // other way round here would deadlock against it.
+    const owner = (await scoped('problem_causes', tenantId, tx)
+      .where('problem_causes.id', causeId)
+      .first('problem_causes.analysis_id')) as { analysis_id: number } | undefined;
+    if (!owner) throw new AppError(404, 'Cause not found', { code: 'not_found' });
+
+    const analysis = await loadAnalysisRow(tenantId, owner.analysis_id, tx, true);
+    if (!analysis) throw new AppError(404, 'Analysis not found', { code: 'not_found' });
+    assertAnalysisEditable(analysis);
+
     const current = (await scoped('problem_causes', tenantId, tx)
       .where('problem_causes.id', causeId)
       .forUpdate()
       .first('problem_causes.*')) as CauseRow | undefined;
     if (!current) throw new AppError(404, 'Cause not found', { code: 'not_found' });
-
-    const analysis = await loadAnalysisRow(tenantId, current.analysis_id, tx);
-    if (!analysis) throw new AppError(404, 'Analysis not found', { code: 'not_found' });
-    assertAnalysisEditable(analysis);
 
     const patch: Record<string, unknown> = {};
     if (input.category !== undefined) patch.category = input.category;
@@ -2069,10 +2378,10 @@ export async function updateCause(
     if (input.kind !== undefined) patch.kind = input.kind;
     if (input.sortOrder !== undefined) patch.sort_order = input.sortOrder;
     if (input.statement !== undefined) {
+      // Clearing an inline field is a legal intermediate state, not an error:
+      // an agent who selects the text and retypes it passes through empty, and
+      // an autosave that answers 400 on the way loses the edit (HARD RULE 12).
       const statement = input.statement.trim();
-      if (statement === '') {
-        throw new AppError(400, 'A cause needs a statement', { code: 'validation_failed' });
-      }
       patch.statement = statement;
     }
 
@@ -2153,12 +2462,15 @@ export async function updateCause(
 /**
  * Delete a node and everything under it.
  *
- * The one refusal: the elected root of a CONCLUDED analysis. There is no
- * foreign key doing this (see the `root_cause_id` column comment in 006), so
- * deleting it would leave the conclusion pointing at nothing and
- * `problem_analyses_concluded_ck` would only notice at the next write. On a
- * still-open analysis the election is simply cleared with the node, in the same
- * transaction, so the pointer is never dangling either way.
+ * The one refusal: a delete that would take the elected root of a CONCLUDED
+ * analysis with it. There is no foreign key doing this (see the `root_cause_id`
+ * column comment in 006), so the conclusion would be left pointing at nothing.
+ * The test is on the doomed SUBTREE, not on the node's identity: in a five-whys
+ * chain the elected root is the deepest node, so deleting any of its ancestors
+ * takes it along, and testing identity alone let that case through to the
+ * `root_cause_id = NULL` below and out as a check violation the client cannot
+ * read. On a still-open analysis the election is simply cleared with the node,
+ * in the same transaction, so the pointer is never dangling either way.
  */
 export async function deleteCause(
   tenantId: number,
@@ -2180,20 +2492,20 @@ export async function deleteCause(
       assertAnalysisEditable(analysis);
     }
 
-    const isElectedRoot = analysis.root_cause_id !== null && int(analysis.root_cause_id) === causeId;
-    if (isElectedRoot && analysis.state === 'concluded') {
-      throw new AppError(
-        422,
-        'This node is the concluded root cause. Reopen the analysis before deleting it.',
-        { code: 'transition_blocked', payload: { analysisId: analysis.id } },
-      );
-    }
-
     const rows = await loadCauseRows(tenantId, current.analysis_id, tx);
     const doomed = subtreeIds(rows, causeId);
 
-    // Clear the election first: the column has no FK, so nothing else would.
-    if (analysis.root_cause_id !== null && doomed.includes(int(analysis.root_cause_id))) {
+    const electedRoot = analysis.root_cause_id === null ? null : int(analysis.root_cause_id);
+    const electionDies = electedRoot !== null && doomed.includes(electedRoot);
+
+    if (electionDies) {
+      // On a CONCLUDED analysis this is refused in words, before anything is
+      // written, whether the node IS the elected root or merely stands above it
+      // (see `assertElectedRootStays`).
+      assertElectedRootStays(analysis);
+
+      // On a still-open one the election goes with the node, first: the column
+      // has no FK, so nothing else would clear it.
       await scoped('problem_analyses', tenantId, tx)
         .where('problem_analyses.id', analysis.id)
         .update({ root_cause_id: null, row_version: tx.raw('row_version + 1'), updated_at: tx.fn.now() });
@@ -2636,6 +2948,18 @@ function publishedKnownErrors(tenantId: number, executor: Executor) {
  * `websearch_to_tsquery`, the `%` trigram operator) rather than growing a
  * second one: two search implementations drift, and the one that drifts is
  * always the one nobody looks at.
+ *
+ * It writes NOTHING, and that is the point. This is a lookup behind a keystroke
+ * on `ticket_read`, a capability whose whole contract is "changes nothing", and
+ * it used to append a `known_error_suggested` row per hit — with no actor,
+ * outside any transaction, on an `excludeTicketId` the caller merely asserted
+ * and nobody checked (`decision_log.ticket_id` carries no foreign key by
+ * design). Anyone holding a read capability could therefore fabricate
+ * engine-looking rows in any ticket's Why drawer, in the one table whose entire
+ * value is being trustworthy. The `known_error_suggested` row belongs to the
+ * side that ACTS on a suggestion, in its transaction and under its actor, for
+ * the same reason `matchKnownErrorForAlert` leaves its row to the alert spine:
+ * only the caller knows whether anything was actually stamped on the ticket.
  */
 export async function suggestKnownErrors(
   tenantId: number,
@@ -2738,36 +3062,7 @@ export async function suggestKnownErrors(
     }
   }
 
-  const suggestions = [...best.values()].sort((a, b) => b.score - a.score).slice(0, limit);
-
-  // HARD RULE 2 — a suggestion IS an automated decision about this incident,
-  // and this row is what later answers "does the text weapon earn its keep?".
-  //
-  // A lookup that found NOTHING writes no row, deliberately: `ticket_id` on
-  // decision_log serves one ticket's Why drawer, and one "we looked and found
-  // nothing" per intake would bury the rows that matter under thousands that
-  // do not. The same volumetric ruling the cascade census already makes.
-  if (input.excludeTicketId && suggestions.length > 0) {
-    for (const suggestion of suggestions) {
-      await withDecision(
-        decisionContext(
-          tenantId,
-          input.excludeTicketId,
-          PROBLEM_DECISIONS.knownErrorSuggested,
-          null,
-          executor,
-          { weapon: suggestion.weapon, score: suggestion.score },
-        ),
-        async (recorder) => {
-          // `accepted` is unknowable at suggestion time; the acceptance is a
-          // later act, and stamping a guess here would poison the metric.
-          recorder.outcome({ problemTicketId: suggestion.problemTicketId, accepted: null });
-        },
-      );
-    }
-  }
-
-  return suggestions;
+  return [...best.values()].sort((a, b) => b.score - a.score).slice(0, limit);
 }
 
 /**
@@ -2778,6 +3073,89 @@ export async function suggestKnownErrors(
  * The `known_error_matched_on_alert` decision belongs to the caller, which is
  * the only side that knows whether it actually stamped anything.
  */
+/**
+ * An inbound alert just opened a ticket. Does a published known error already
+ * describe this exact signal, and if so, say so on the ticket.
+ *
+ * This is the reader `problem_alert_signatures` was built for. Without it the
+ * table, its two routes and the curation tab were write-only end to end: an
+ * engineer could bind a dedupe key to a known error and nothing anywhere would
+ * ever read the bond back. The whole value of a known error is that the NEXT
+ * occurrence arrives with its workaround attached, and the alert rail is where
+ * the next occurrence actually arrives.
+ *
+ * Internal note, not a public reply: the desk decides what to tell the
+ * requester. Silent on no match, and silent on failure — an alert must still
+ * become a ticket when the problem module is having a bad day.
+ *
+ * Returns the problem ticket id when one matched, so the caller can log it.
+ */
+export async function noteKnownErrorOnAlertTicket(
+  tenantId: number,
+  ticketId: number,
+  sourceApp: string,
+  dedupeKey: string,
+  trx: Knex.Transaction,
+): Promise<number | null> {
+  const known = await matchKnownErrorForAlert(tenantId, sourceApp, dedupeKey, trx);
+  if (!known) return null;
+
+  const problemTicketId = known.ticketId;
+  const problemNumber = known.ticket?.number ?? `#${problemTicketId}`;
+  const workaround = (known.workaroundMd ?? '').trim();
+
+  const bodyMd = workaround
+    ? `This alert matches known error ${problemNumber}. Documented workaround:
+
+${workaround}`
+    : `This alert matches known error ${problemNumber}, which has no workaround recorded yet.`;
+
+  const entry = await journalService.append(
+    {
+      tenantId,
+      ticketId,
+      kind: 'automation',
+      visibility: 'internal',
+      authorId: null,
+      authorType: 'system',
+      bodyMd,
+      meta: {
+        ruleSlug: PROBLEM_ENGINE_SLUG,
+        ruleVersion: PROBLEM_ENGINE_VERSION,
+        problemNumber,
+        i18nKey: 'problem.knownError.matchedOnAlert',
+      },
+      emit: false,
+    },
+    trx,
+  );
+
+  afterCommit(trx, () =>
+    journalService.emitDeskEvent(
+      [ROOMS.ticket(ticketId), ROOMS.tenant(tenantId)],
+      SOCKET_EVENTS.journalAppended,
+      { tenantId, at: new Date().toISOString(), ticketId, entry },
+    ),
+  );
+
+  // HARD RULE 2 — the match IS an automated decision, on the same code path.
+  await withDecision(
+    decisionContext(
+      tenantId,
+      ticketId,
+      PROBLEM_DECISIONS.knownErrorMatchedOnAlert,
+      null,
+      trx,
+      { sourceApp, dedupeKey },
+    ),
+    async (recorder) => {
+      recorder.outcome({ problemTicketId, problemNumber, hasWorkaround: workaround !== '' });
+    },
+  );
+
+  return problemTicketId;
+}
+
 export async function matchKnownErrorForAlert(
   tenantId: number,
   sourceApp: string,
@@ -2824,13 +3202,29 @@ const UNKNOWN_SCHEDULED_INSTANT = 'unknown';
 /** Custom-field keys an intake form may use for the planned intervention. */
 const SCHEDULED_FIELD_KEYS = ['scheduledFor', 'scheduled_for', 'scheduledAt', 'scheduled_at'];
 
+/**
+ * A linked incident, as the row plus the facts the shared classifier reasons
+ * over. The row travels alongside the snapshot because the state machine has to
+ * be evaluated against the whole ticket, and re-reading it per incident would
+ * be a second query saying the same thing.
+ */
+interface CascadeEntry {
+  snapshot: CascadeIncidentSnapshot;
+  row: CascadeTicketRow;
+}
+
+/** `tickets.*`, of which these are the columns this file reads by name. */
 interface CascadeTicketRow {
   id: number;
   number: string;
+  status_slug: string;
   status_category: string;
+  queue_slug: string;
   row_version: number | string;
   first_response_at: Date | string | null;
+  due_at: Date | string | null;
   data: Record<string, unknown> | null;
+  [column: string]: unknown;
 }
 
 /**
@@ -2843,29 +3237,31 @@ interface CascadeTicketRow {
  *   • never a soft-deleted ticket;
  *   • ordered by id, deterministically, because the cap slices a PREFIX and a
  *     preview that sliced a different prefix from the pass would be a lie.
+ *
+ * `window` pages IN SQL, for the panel that lists the incidents; the cascade
+ * itself never passes one, because a plan computed over a page is not a plan.
+ * `ticketIds` narrows to one incident, for the re-read the pass does under the
+ * ticket lock before it acts.
  */
-async function loadCascadeSnapshots(
+async function loadCascade(
   tenantId: number,
   problemTicketId: number,
   executor: Executor,
-): Promise<CascadeIncidentSnapshot[]> {
-  const rows = (await scoped('ticket_link', tenantId, executor)
+  options: { ticketIds?: readonly number[]; window?: { limit: number; offset: number } } = {},
+): Promise<CascadeEntry[]> {
+  const qb = scoped('ticket_link', tenantId, executor)
     .join('tickets', 'tickets.id', 'ticket_link.from_ticket_id')
     .where('tickets.tenant_id', tenantId)
     .where('ticket_link.to_ticket_id', problemTicketId)
     .where('ticket_link.kind', PROBLEM_LINK_KIND)
     .whereIn('tickets.record_type', CASCADE_ELIGIBLE_RECORD_TYPES as unknown as string[])
     .whereNull('tickets.deleted_at')
-    .orderBy('tickets.id', 'asc')
-    .select(
-      'tickets.id',
-      'tickets.number',
-      'tickets.status_category',
-      'tickets.row_version',
-      'tickets.first_response_at',
-      'tickets.data',
-    )) as unknown as CascadeTicketRow[];
+    .orderBy('tickets.id', 'asc');
 
+  if (options.ticketIds) qb.whereIn('tickets.id', options.ticketIds as number[]);
+  if (options.window) qb.limit(options.window.limit).offset(options.window.offset);
+
+  const rows = (await qb.select('tickets.*')) as unknown as CascadeTicketRow[];
   if (rows.length === 0) return [];
 
   const ids = rows.map((row) => row.id);
@@ -2880,32 +3276,89 @@ async function loadCascadeSnapshots(
     const category = row.status_category as StatusCategory;
     let scheduledFor: string | null = null;
     if (category === 'scheduled') {
-      scheduledFor = readScheduledInstant(row.data) ?? UNKNOWN_SCHEDULED_INSTANT;
+      scheduledFor =
+        readScheduledInstant(row) ?? UNKNOWN_SCHEDULED_INSTANT;
     }
 
     return {
-      ticketId: row.id,
-      number: row.number,
-      statusCategory: category,
-      rowVersion: int(row.row_version, 1),
-      firstResponseAt: iso(row.first_response_at),
-      lastPublicReplyBy: lastPublic.get(row.id) ?? null,
-      hasOpenApproval: approvals.has(row.id),
-      scheduledFor,
-      // Same definition the alert recovery already uses: an agent journal entry
-      // or logged time. Both mean a human spent their afternoon on this, and
-      // auto-resolving deletes that from the record.
-      humanTouched: worked.has(row.id) || timed.has(row.id),
+      row,
+      snapshot: {
+        ticketId: row.id,
+        number: row.number,
+        statusCategory: category,
+        statusSlug: String(row.status_slug ?? ''),
+        rowVersion: int(row.row_version, 1),
+        firstResponseAt: iso(row.first_response_at),
+        lastPublicReplyBy: lastPublic.get(row.id) ?? null,
+        hasOpenApproval: approvals.has(row.id),
+        scheduledFor,
+        // Same definition the alert recovery already uses: an agent journal
+        // entry or logged time. Both mean a human spent their afternoon on
+        // this, and auto-resolving deletes that from the record.
+        humanTouched: worked.has(row.id) || timed.has(row.id),
+      },
     };
   });
 }
 
-function readScheduledInstant(data: Record<string, unknown> | null): string | null {
-  if (!data) return null;
-  for (const key of SCHEDULED_FIELD_KEYS) {
-    const value = data[key];
-    if (typeof value === 'string' && value.trim() !== '') return value;
+async function loadCascadeSnapshots(
+  tenantId: number,
+  problemTicketId: number,
+  executor: Executor,
+  options: { ticketIds?: readonly number[]; window?: { limit: number; offset: number } } = {},
+): Promise<CascadeIncidentSnapshot[]> {
+  const entries = await loadCascade(tenantId, problemTicketId, executor, options);
+  return entries.map((entry) => entry.snapshot);
+}
+
+/**
+ * When the planned intervention instant is knowable, and from where.
+ *
+ * Two columns can hold it and only one of them is ever trustworthy:
+ *
+ *   • a custom field in `tickets.data` (`SCHEDULED_FIELD_KEYS`), which is
+ *     unambiguous because nothing else writes those keys;
+ *   • `tickets.due_at`, which is where the SHIPPED `schedule` transition puts
+ *     it (`required_fields: ['ticket.due_at']`) — but which migration 002
+ *     documents as "the denormalised earliest live SLA due date", and which
+ *     `sla.service` rewrites from `sla_instances` every time a clock moves.
+ *
+ * Reading only `data` meant the shipped configuration never produced an instant
+ * at all, so EVERY scheduled incident was blocked with `scheduled_future` and
+ * the reason written to its journal and to decision_log was false. Reading
+ * `due_at` unconditionally would be worse: on a ticket with a live clock the
+ * column is an SLA deadline, usually already past, and the cascade would resolve
+ * an incident whose intervention has not happened — the one direction this pass
+ * must never fail in.
+ *
+ * So `due_at` is read only when no live SLA instance can have written it, using
+ * the SAME predicate `refreshTicketDueAt` uses to write it. Unknown stays
+ * unknown, and unknown blocks.
+ */
+function readScheduledInstant(row: CascadeTicketRow): string | null {
+  const data = row.data;
+  if (data) {
+    for (const key of SCHEDULED_FIELD_KEYS) {
+      const value = data[key];
+      if (typeof value === 'string' && value.trim() !== '') return value;
+    }
   }
+  // `tickets.due_at` is NOT a fallback, and using it as one opened a
+  // false-resolution path. A BREACHED sla_instance is neither running nor
+  // paused, so "does the SLA own this due_at" answered no while the column
+  // still held the target the SLA engine wrote, in the PAST. The cascade then
+  // read a stale breach deadline as the intervention date, found it behind us,
+  // stopped blocking, and resolved an incident whose visit had not happened.
+  //
+  // Widening the ownership test to cover breached instances does not work
+  // either: the shipped policy gives every incident a clock, so it would answer
+  // yes for everything and no scheduled incident could ever cascade at all.
+  //
+  // One column cannot mean both "when the SLA is due" and "when the engineer is
+  // coming". The intervention instant is therefore read ONLY from where it is
+  // actually authored, and a scheduled incident with no recorded date stays
+  // unknown. Unknown blocks: refusing to resolve a ticket we cannot date is a
+  // recoverable annoyance; resolving one whose visit has not happened is not.
   return null;
 }
 
@@ -2997,6 +3450,110 @@ function emptyOutcome(): ProblemCascadeOutcome {
 }
 
 /**
+ * The refusals the tenant's own state machine can be read off IN ADVANCE.
+ *
+ * The plan reasons about the closure policy and knows nothing about the
+ * `required_fields` a tenant hung on the edge into `resolved`. The shipped one
+ * asks for `ticket.assignee_id` — which the cascade cannot supply and must
+ * never invent — so on the shipped desk every unassigned incident is refused at
+ * the door while the preview promised to resolve it. Two evaluators, two
+ * answers, and the agent approves the wrong one (HARD RULE 12 says there is one
+ * evaluator on both sides; this is that evaluator, run early).
+ *
+ * Only the ACTOR-INDEPENDENT half of the verdict is taken from the evaluation:
+ *
+ *   • the required fields, computed from the ticket's own columns plus the two
+ *     values the pass supplies, so it cannot disagree with `transition()`;
+ *   • the graph itself — no such status, no arc from here, already terminal;
+ *   • the GUARD verdict is NOT usable here. It reads the `context.*` extras
+ *     `transition()` loads per ticket, which a preview over a thousand
+ *     incidents will not load, and a preview that predicted a refusal the pass
+ *     then allowed would be its own kind of lie.
+ *
+ * The actor is synthetic for the same reason. Where several edges reach
+ * `resolved`, `evaluateTransition` keeps the least-blocked one, so an actor
+ * matching none of them can only make this function predict LESS than the pass
+ * will refuse. Under-predicting leaves the status quo; over-predicting would
+ * invent a refusal.
+ */
+async function predictedFieldRefusals(
+  tenantId: number,
+  entries: readonly CascadeEntry[],
+  classifications: readonly CascadeClassification[],
+  executor: Executor,
+): Promise<Map<number, string[]>> {
+  const refusals = new Map<number, string[]>();
+  const attempts = classifications.filter((entry) => entry.resolves);
+  if (attempts.length === 0) return refusals;
+
+  const byId = new Map(entries.map((entry) => [entry.snapshot.ticketId, entry]));
+  const requiredWhenFields: RequiredWhenField[] = await loadRequiredWhenFields(tenantId, executor);
+  const machines = new Map<string, NormalizedStateMachine>();
+  const now = new Date().toISOString();
+  const actor: ActorContext = {
+    userId: null,
+    actorType: 'automation',
+    capabilities: [],
+    isAdmin: false,
+  };
+
+  for (const attempt of attempts) {
+    const found = byId.get(attempt.ticketId);
+    if (!found) continue;
+
+    const queueSlug = found.row.queue_slug;
+    let machine = machines.get(queueSlug);
+    if (machine === undefined) {
+      machine = await loadStateMachineForTicket(tenantId, { queueSlug }, executor);
+      machines.set(queueSlug, machine);
+    }
+
+    // HARD RULE 5 — by category, in the incident's own machine. No target means
+    // this queue's workflow has no resolved status at all, which the pass
+    // reports as `transition_refused`; saying so now costs nothing.
+    const target = statusForCategory(machine, CASCADE_TARGET_CATEGORY);
+    if (!target) {
+      refusals.set(attempt.ticketId, []);
+      continue;
+    }
+
+    const decision = evaluateTransition({
+      machine,
+      ticket: ticketService.mapTicketRow(
+        found.row as unknown as Parameters<typeof ticketService.mapTicketRow>[0],
+      ),
+      actor,
+      toStatusSlug: target.slug,
+      // The exact text is irrelevant to an `is_not_empty` test; what matters is
+      // that the pass supplies these two and nothing else.
+      fields: {
+        'ticket.resolution_code': CASCADE_RESOLUTION_CODE,
+        'ticket.resolution_md': 'Resolved by the problem this incident hangs under.',
+      },
+      requiredWhenFields,
+      now,
+    });
+
+    // The graph-level refusals are decided before any actor is consulted, so
+    // they are as certain as the field ones: the shipped `resolve` edge starts
+    // at `triage`, and an incident still sitting in `new` has no arc to
+    // `resolved` at all.
+    const structural = decision.blocked.some(
+      (reason) =>
+        reason.code === 'no_transition' ||
+        reason.code === 'unknown_status' ||
+        reason.code === 'terminal_status',
+    );
+
+    if (structural || decision.missingRequiredFields.length > 0) {
+      refusals.set(attempt.ticketId, decision.missingRequiredFields);
+    }
+  }
+
+  return refusals;
+}
+
+/**
  * The dry run. Writes nothing, logs nothing, and produces the SAME shape the
  * real pass returns, because the page that said "12 will be resolved" has to
  * render the same component afterwards saying "12 were resolved".
@@ -3012,12 +3569,35 @@ export async function previewCascade(
   const row = await requireProblemRow(tenantId, problemTicketId, executor);
   const effectivePolicy = policy ?? (row.closure_policy as ProblemClosurePolicy);
 
-  const snapshots = await loadCascadeSnapshots(tenantId, problemTicketId, executor);
+  const entries = await loadCascade(tenantId, problemTicketId, executor);
+  const snapshots = entries.map((entry) => entry.snapshot);
   const plan = planClosureCascade(snapshots, effectivePolicy, {
     maxIncidents: LIMITS.problemCascadeMaxIncidents,
   });
 
   const byId = new Map(snapshots.map((snapshot) => [snapshot.ticketId, snapshot]));
+  const predicted = await predictedFieldRefusals(tenantId, entries, plan.actionable, executor);
+
+  const blockedByReason: Partial<Record<CascadeBlockReason, number>> = { ...plan.blockedByReason };
+  const blocked = plan.actionable
+    .filter((entry) => entry.bucket === 'blocked_human_waiting' && entry.blockReason !== null)
+    .map((entry) => ({
+      ticketId: entry.ticketId,
+      number: byId.get(entry.ticketId)?.number ?? String(entry.ticketId),
+      reason: entry.blockReason as CascadeBlockReason,
+    }));
+
+  // The workflow's own refusals, reported in the SAME list the pass fills in
+  // afterwards, so the agent reads "these will not move, and why" before the
+  // click rather than in a post-mortem.
+  for (const ticketId of predicted.keys()) {
+    blocked.push({
+      ticketId,
+      number: byId.get(ticketId)?.number ?? String(ticketId),
+      reason: 'transition_refused' as CascadeBlockReason,
+    });
+    blockedByReason.transition_refused = (blockedByReason.transition_refused ?? 0) + 1;
+  }
 
   return {
     problemTicketId,
@@ -3027,20 +3607,14 @@ export async function previewCascade(
     outcome: {
       total: plan.total,
       skippedTerminal: plan.skippedTerminal,
-      blocked: plan.blockedByReason,
+      blocked: blockedByReason,
       autoResolved: plan.autoResolved,
       workedNotWaiting: plan.workedNotWaiting,
       truncated: plan.truncated,
       remaining: plan.remaining,
     },
     resolvedTicketIds: [],
-    blocked: plan.actionable
-      .filter((entry) => entry.bucket === 'blocked_human_waiting' && entry.blockReason !== null)
-      .map((entry) => ({
-        ticketId: entry.ticketId,
-        number: byId.get(entry.ticketId)?.number ?? String(entry.ticketId),
-        reason: entry.blockReason as CascadeBlockReason,
-      })),
+    blocked,
   };
 }
 
@@ -3057,11 +3631,16 @@ export async function listCascadeIncidents(
 /**
  * The linked incidents the problem page lists, one page at a time.
  *
- * A thin page over `listCascadeIncidents` rather than a second query: the
- * snapshot it builds already carries the facts the cascade classifier keys off,
- * which is exactly what the panel renders next to each incident. Counting them
- * twice under two names would be two places for the same classification to
- * drift, and the one that drifts is always the one nobody reads.
+ * The same snapshot the cascade classifier keys off, deliberately: the panel
+ * renders those facts next to each incident, and computing them a second way
+ * under a second name would be two places for one classification to drift.
+ *
+ * The PAGE is cut in SQL, not in memory. Cutting it afterwards meant every
+ * request rebuilt the whole set first — the join, plus the approval, journal,
+ * time and SLA passes over every linked id — and then threw away all but fifty
+ * rows. On a problem with a thousand incidents each page view paid for a full
+ * cascade load, and the journal scan is proportional to the entire public
+ * conversation of every one of them.
  */
 export async function listLinkedIncidents(
   tenantId: number,
@@ -3069,10 +3648,12 @@ export async function listLinkedIncidents(
   query: { page?: number; limit?: number } = {},
   executor: Executor = db,
 ): Promise<CascadeIncidentSnapshot[]> {
-  const all = await listCascadeIncidents(tenantId, problemTicketId, executor);
+  assertTenantId(tenantId);
   const limit = Math.min(PAGINATION.maxLimit, Math.max(1, Math.trunc(query.limit ?? PAGINATION.defaultLimit)));
   const page = Math.max(1, Math.trunc(query.page ?? 1));
-  return all.slice((page - 1) * limit, (page - 1) * limit + limit);
+  return loadCascadeSnapshots(tenantId, problemTicketId, executor, {
+    window: { limit, offset: (page - 1) * limit },
+  });
 }
 
 /**
@@ -3102,7 +3683,10 @@ export async function listLinkedIncidents(
  *      while the census claimed success;
  *   7. `baseRowVersion` is the version read when the plan was built, so a
  *      ticket somebody edited in between becomes `concurrent_edit` instead of
- *      being clobbered (HARD RULE 7);
+ *      being clobbered (HARD RULE 7). On its own it is NOT enough — appending a
+ *      journal entry does not bump `row_version` — so every guard is re-read
+ *      under the incident's own lock and re-classified by the same shared
+ *      function immediately before the move (see `resolveOneIncident`);
  *   8. everything above the cap is reported as `truncated` / `remaining`. A
  *      truncation that looks like a completion is the failure nobody catches.
  */
@@ -3179,8 +3763,31 @@ export async function cascadeOnResolve(
 
           if (!entry.resolves) {
             // Worked or untouched, but the policy says notify only.
+            //
+            // It gets a row of its own all the same (HARD RULE 2): the engine
+            // just posted an automation note on somebody else's ticket, and
+            // "why is there a note here?" is asked from THAT ticket's Why
+            // drawer, which reads decision_log and never the timeline. The
+            // blocked branch above writes one for the very same gesture, and on
+            // a default-configured tenant (`notify_only`) this is the branch
+            // almost every incident takes. The decision is named for the pass
+            // rather than for a resolution: nothing was resolved here, and a
+            // row asserting what did not happen is worse than no row at all.
             if (entry.notifies) {
               await notifyIncident(tenantId, actor, snapshot, problemNumber, null, tx);
+              await withDecision(
+                decisionContext(
+                  tenantId,
+                  snapshot.ticketId,
+                  PROBLEM_DECISIONS.closureCascade,
+                  actor,
+                  tx,
+                  { problemTicketId, policy, bucket: entry.bucket },
+                ),
+                async (inner) => {
+                  inner.outcome({ notified: true, resolved: false, reason: 'policy_notifies_only' });
+                },
+              );
             }
             continue;
           }
@@ -3193,6 +3800,7 @@ export async function cascadeOnResolve(
             problemNumber,
             snapshot,
             entry.bucket,
+            policy,
             machines,
             tx,
           );
@@ -3210,7 +3818,17 @@ export async function cascadeOnResolve(
             total: plan.total,
             skippedTerminal: plan.skippedTerminal,
             blocked: blockedByReason,
-            autoResolved: resolvedTicketIds.length,
+            // BUCKET counts, exactly as the preview reported them, because that
+            // is what these two fields are: `autoResolved` and
+            // `workedNotWaiting` are disjoint populations of `total`. Putting
+            // the number of RESOLVED incidents in the first one counted every
+            // worked incident twice under `resolve_all_pending_confirmation`
+            // (both buckets resolve there), so the census read 10 + 4 out of a
+            // total of 10 and an audit asking "how many never-worked incidents
+            // did we close automatically?" got the wrong answer. How many
+            // actually moved is `resolvedTicketIds`, and the census row carries
+            // that count under its own name.
+            autoResolved: plan.autoResolved,
             workedNotWaiting: plan.workedNotWaiting,
             truncated: plan.truncated,
             remaining: plan.remaining,
@@ -3219,7 +3837,7 @@ export async function cascadeOnResolve(
           blocked,
         };
 
-        recorder.outcome({ ...result.outcome });
+        recorder.outcome({ ...result.outcome, resolved: resolvedTicketIds.length });
         return result;
       },
     );
@@ -3234,6 +3852,18 @@ export async function cascadeOnResolve(
  * first failure would abort the enclosing transaction and every later statement
  * would fail with 25P02 — the census would then claim a pass that never
  * happened, which is worse than a blocked incident.
+ *
+ * The guards are RE-READ here, under the incident's own row lock, and handed
+ * back to the same shared classifier that built the plan. `baseRowVersion` does
+ * not cover them: `addJournalEntry` writes a public reply and stamps
+ * `first_response_at`/`updated_at` WITHOUT bumping `row_version`, so a
+ * requester answering while the wave is running leaves the version untouched
+ * and the transition sails through — auto-resolving the one ticket
+ * `requester_spoke_last` exists to protect, with their question unanswered. A
+ * thousand-incident pass runs for minutes, so that window is a Tuesday, not a
+ * thought experiment. Taking the ticket row FOR UPDATE first is what makes the
+ * re-read meaningful: `journal.service` locks the same row to allocate its
+ * `seq`, so a reply is either already visible here or waits behind us.
  */
 async function resolveOneIncident(
   tenantId: number,
@@ -3242,6 +3872,7 @@ async function resolveOneIncident(
   problemNumber: string,
   snapshot: CascadeIncidentSnapshot,
   bucket: string,
+  policy: ProblemClosurePolicy,
   machines: Map<string, string | null>,
   tx: Knex.Transaction,
 ): Promise<{ resolved: true } | { resolved: false; reason: CascadeBlockReason }> {
@@ -3249,10 +3880,48 @@ async function resolveOneIncident(
     return await tx.transaction(async (sp) => {
       const ticket = (await scoped('tickets', tenantId, sp)
         .where('tickets.id', snapshot.ticketId)
-        .first('tickets.id', 'tickets.queue_slug')) as
-        | { id: number; queue_slug: string }
+        .forUpdate()
+        .first(
+          'tickets.id',
+          'tickets.queue_slug',
+          'tickets.status_slug',
+          'tickets.status_category',
+        )) as
+        | { id: number; queue_slug: string; status_slug: string; status_category: string }
         | undefined;
       if (!ticket) return { resolved: false, reason: 'transition_refused' as CascadeBlockReason };
+
+      // ── The guards, as they stand NOW ─────────────────────────────────────
+      const [fresh] = await loadCascadeSnapshots(tenantId, problemTicketId, sp, {
+        ticketIds: [snapshot.ticketId],
+      });
+      if (!fresh) return { resolved: false, reason: 'transition_refused' as CascadeBlockReason };
+
+      const recheck = classifyCascadeIncident({ incident: fresh, policy });
+      if (!recheck.resolves) {
+        // A guard that fired between the plan and the act gets the same
+        // treatment as one that fired in the plan: the note, then the row.
+        // `concurrent_edit` covers the reasonless cases — somebody resolved it,
+        // or started working it, while the wave was running.
+        const reason: CascadeBlockReason = recheck.blockReason ?? 'concurrent_edit';
+        if (recheck.blockReason !== null) {
+          await notifyIncident(tenantId, actor, snapshot, problemNumber, recheck.blockReason, sp);
+        }
+        await withDecision(
+          decisionContext(
+            tenantId,
+            snapshot.ticketId,
+            PROBLEM_DECISIONS.incidentCascadeBlocked,
+            actor,
+            sp,
+            { problemTicketId, bucket, baseRowVersion: snapshot.rowVersion },
+          ),
+          async (recorder) => {
+            recorder.outcome({ reason, reread: true, plannedBucket: bucket });
+          },
+        );
+        return { resolved: false, reason };
+      }
 
       // HARD RULE 5 — resolve the SLUG from the tenant's machine by CATEGORY,
       // per queue, cached for the pass. Never a literal.
@@ -3276,7 +3945,7 @@ async function resolveOneIncident(
         return { resolved: false, reason: 'transition_refused' as CascadeBlockReason };
       }
 
-      await ticketService.transition(
+      const applied = await ticketService.transition(
         tenantId,
         actor,
         snapshot.ticketId,
@@ -3304,6 +3973,33 @@ async function resolveOneIncident(
         async (recorder) => {
           recorder.outcome({ statusSlug: targetSlug, resolutionCode: CASCADE_RESOLUTION_CODE });
         },
+      );
+
+      // `transition()` emits nothing when it is handed a transaction, and this
+      // one always hands it one. Announced after the real commit, on the same
+      // rooms and in the same shape the interactive path uses, so a colleague
+      // with this incident open sees it move instead of discovering it on their
+      // next save (as a 409 they did not expect).
+      afterCommit(tx, () =>
+        journalService.emitDeskEvent(
+          [
+            ROOMS.ticket(snapshot.ticketId),
+            ROOMS.tenant(tenantId),
+            ROOMS.queue(tenantId, applied.ticket.queueSlug),
+          ],
+          SOCKET_EVENTS.ticketStatusChanged,
+          {
+            tenantId,
+            at: new Date().toISOString(),
+            ticketId: snapshot.ticketId,
+            fromStatusSlug: ticket.status_slug,
+            toStatusSlug: applied.ticket.statusSlug,
+            fromCategory: ticket.status_category as StatusCategory,
+            toCategory: applied.ticket.statusCategory,
+            rowVersion: applied.ticket.rowVersion,
+            actorId: actor.userId ?? null,
+          },
+        ),
       );
 
       return { resolved: true as const };
@@ -3365,7 +4061,7 @@ async function notifyIncident(
       ? `The underlying problem ${problemNumber} has been resolved. This ticket was left as it is.`
       : `The underlying problem ${problemNumber} has been resolved, but this ticket still needs a human.`;
 
-  await journalService.append(
+  const entry = await journalService.append(
     {
       tenantId,
       ticketId: snapshot.ticketId,
@@ -3385,6 +4081,16 @@ async function notifyIncident(
       emit: false,
     },
     executor,
+  );
+
+  // And this module IS that owner. `emit: false` above was never a decision to
+  // stay silent, only a decision to speak after the commit; nobody was speaking.
+  afterCommit(executor, () =>
+    journalService.emitDeskEvent(
+      [ROOMS.ticket(snapshot.ticketId), ROOMS.tenant(tenantId)],
+      SOCKET_EVENTS.journalAppended,
+      { tenantId, at: new Date().toISOString(), ticketId: snapshot.ticketId, entry },
+    ),
   );
 }
 
@@ -3427,7 +4133,32 @@ export async function onProblemResolved(event: ProblemResolvedEvent): Promise<vo
   if (!enteringResolved && !enteringClosedDirectly) return;
 
   const row = await loadProblemRow(tenantId, ticket.id, trx, true);
-  if (!row) return;
+  if (!row) {
+    // A ticket carrying `record_type = 'problem'` with no `problems` row is not
+    // a problem this module can act on: it has no closure policy, no known
+    // error, no analysis, and `problemService.get()` answers 404 for it. Only
+    // `promote()` writes that row, while `POST /api/tickets`, `split()` and the
+    // rule builder's `create_child_ticket` action all accept the record type, so
+    // the orphan is reachable from shipped configuration — and it can carry
+    // `caused_by` links, because the generic link API accepts that kind.
+    //
+    // Doing nothing is the right action: inventing a `problems` row here would
+    // fabricate a `detected_by` and a `closure_policy` nobody chose, at the
+    // moment of resolution, and the cascade would then act on them. Doing
+    // nothing SILENTLY is not: the operator resolved something the desk calls a
+    // problem and no cascade ran. So the engine says so, once, on the ticket
+    // whose Why drawer the question will be asked from (HARD RULE 2).
+    await withDecision(
+      decisionContext(tenantId, ticket.id, PROBLEM_DECISIONS.closureCascade, actor, trx, {
+        recordType: ticket.recordType,
+        statusCategory: category,
+      }),
+      async (recorder) => {
+        recorder.noop('no_problem_record');
+      },
+    );
+    return;
+  }
 
   await cascadeOnResolve(tenantId, actor, ticket.id, { trx });
 

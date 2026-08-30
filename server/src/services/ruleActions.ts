@@ -2222,7 +2222,16 @@ const PERFORMERS: Readonly<Record<RuleActionKind, Performer>> = {
     if (!number) return skipped('missing_ticket_number');
 
     const linkKind = String(action.params.linkKind ?? 'related');
-    if (linkKind === 'merged_from') return skipped('forbidden_link_kind', { linkKind });
+    // 'merged_from' belongs to merge(), and 'caused_by' belongs to the problem
+    // module: it moves problems.incident_count, first_incident_at and
+    // last_incident_at, it owes the incident a decision_log row, and it must
+    // refuse an incident already hanging under another problem. A rule writing
+    // it directly would do none of the three, which is exactly why
+    // ticket.service.addLink refuses it too. Refusing it in ONE place and not
+    // the other would just move the hole.
+    if (linkKind === 'merged_from' || linkKind === 'caused_by') {
+      return skipped('forbidden_link_kind', { linkKind });
+    }
 
     const other = await ticketService.getByNumber(ctx.tenantId, number, ctx.trx);
     if (!other) return skipped('unknown_ticket', { number });

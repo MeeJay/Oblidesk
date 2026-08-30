@@ -564,7 +564,9 @@ router.delete(
   '/:ticketId/signatures/:signatureId',
   write,
   asyncHandler(async (req, res) => {
-    const { signatureId } = parseOrThrow(signatureParamsSchema, req.params);
+    const { ticketId, signatureId } = parseOrThrow(signatureParamsSchema, req.params);
+    // The path names a problem; the child id must actually hang under it.
+    await problemService.assertChildOfProblem(req.tenantId, ticketId, { signatureId });
     const actor = await actorOf(req);
 
     const removed = await problemService.removeAlertSignature(req.tenantId, actor, signatureId);
@@ -619,7 +621,9 @@ router.patch(
   '/:ticketId/analyses/:analysisId',
   write,
   asyncHandler(async (req, res) => {
-    const { analysisId } = parseOrThrow(analysisParamsSchema, req.params);
+    const { ticketId, analysisId } = parseOrThrow(analysisParamsSchema, req.params);
+    // The path names a problem; the child id must actually hang under it.
+    await problemService.assertChildOfProblem(req.tenantId, ticketId, { analysisId });
     const body = parseOrThrow(updateProblemAnalysisSchema, req.body ?? {});
     const actor = await actorOf(req);
 
@@ -643,7 +647,9 @@ router.post(
   '/:ticketId/analyses/:analysisId/state',
   write,
   asyncHandler(async (req, res) => {
-    const { analysisId } = parseOrThrow(analysisParamsSchema, req.params);
+    const { ticketId, analysisId } = parseOrThrow(analysisParamsSchema, req.params);
+    // The path names a problem; the child id must actually hang under it.
+    await problemService.assertChildOfProblem(req.tenantId, ticketId, { analysisId });
     const body = parseOrThrow(changeProblemAnalysisStateSchema, req.body ?? {});
     const actor = await actorOf(req);
 
@@ -666,7 +672,9 @@ router.post(
   '/:ticketId/analyses/:analysisId/causes',
   write,
   asyncHandler(async (req, res) => {
-    const { analysisId } = parseOrThrow(analysisParamsSchema, req.params);
+    const { ticketId, analysisId } = parseOrThrow(analysisParamsSchema, req.params);
+    // The path names a problem; the child id must actually hang under it.
+    await problemService.assertChildOfProblem(req.tenantId, ticketId, { analysisId });
     const body = parseOrThrow(createProblemCauseSchema, req.body ?? {});
     const actor = await actorOf(req);
 
@@ -680,7 +688,9 @@ router.patch(
   '/:ticketId/causes/:causeId',
   write,
   asyncHandler(async (req, res) => {
-    const { causeId } = parseOrThrow(causeParamsSchema, req.params);
+    const { ticketId, causeId } = parseOrThrow(causeParamsSchema, req.params);
+    // The path names a problem; the child id must actually hang under it.
+    await problemService.assertChildOfProblem(req.tenantId, ticketId, { causeId });
     const body = parseOrThrow(updateProblemCauseSchema, req.body ?? {});
     const actor = await actorOf(req);
 
@@ -700,7 +710,9 @@ router.delete(
   '/:ticketId/causes/:causeId',
   write,
   asyncHandler(async (req, res) => {
-    const { causeId } = parseOrThrow(causeParamsSchema, req.params);
+    const { ticketId, causeId } = parseOrThrow(causeParamsSchema, req.params);
+    // The path names a problem; the child id must actually hang under it.
+    await problemService.assertChildOfProblem(req.tenantId, ticketId, { causeId });
     const actor = await actorOf(req);
 
     const removed = await problemService.deleteCause(req.tenantId, actor, causeId);
@@ -720,7 +732,9 @@ router.post(
   '/:ticketId/causes/:causeId/confirm',
   write,
   asyncHandler(async (req, res) => {
-    const { causeId } = parseOrThrow(causeParamsSchema, req.params);
+    const { ticketId, causeId } = parseOrThrow(causeParamsSchema, req.params);
+    // The path names a problem; the child id must actually hang under it.
+    await problemService.assertChildOfProblem(req.tenantId, ticketId, { causeId });
     const body = parseOrThrow(confirmProblemCauseSchema, req.body ?? {});
     const actor = await actorOf(req);
 
@@ -740,7 +754,9 @@ router.post(
   '/:ticketId/causes/:causeId/evidence',
   write,
   asyncHandler(async (req, res) => {
-    const { causeId } = parseOrThrow(causeParamsSchema, req.params);
+    const { ticketId, causeId } = parseOrThrow(causeParamsSchema, req.params);
+    // The path names a problem; the child id must actually hang under it.
+    await problemService.assertChildOfProblem(req.tenantId, ticketId, { causeId });
     const body = parseOrThrow(addProblemCauseEvidenceSchema, req.body ?? {});
     const actor = await actorOf(req);
 

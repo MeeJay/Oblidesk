@@ -546,6 +546,22 @@ export const alertService = {
 
       const ticket = await this.openTicket(trx, tenantId, binding, severity, body, ciId, alertId);
       await trx('suite_alerts').where({ id: alertId }).update({ ticket_id: ticket.id });
+
+      // A published known error may already describe this exact signal. Asking
+      // here is the point of `problem_alert_signatures`: the value of writing a
+      // known error down is that the NEXT occurrence arrives carrying its
+      // workaround, and this is where the next occurrence arrives. Inside the
+      // same transaction as the ticket, so the note and the ticket commit
+      // together; silent on no match, and it never blocks the ingest.
+      try {
+        const { noteKnownErrorOnAlertTicket } = await import('./problem.service');
+        await noteKnownErrorOnAlertTicket(tenantId, ticket.id, body.source, body.stableKey, trx);
+      } catch (err) {
+        logger.warn(
+          { err, tenantId, ticketId: ticket.id },
+          'alert: known-error lookup failed — the ticket stands',
+        );
+      }
       return { alertId, stableKey: body.stableKey, action: 'created' as const, ticketId: ticket.id, ticketNumber: ticket.number };
     });
   },

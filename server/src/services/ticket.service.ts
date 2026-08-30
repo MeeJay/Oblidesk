@@ -30,6 +30,7 @@ import {
   DEFAULT_QUEUE_SLUG,
   LIMITS,
   PAGINATION,
+  PROBLEM_LINK_KIND,
   ROOMS,
   SOCKET_EVENTS,
   TICKET_RECORD_TYPES,
@@ -3698,19 +3699,21 @@ export async function listWatchers(tenantId: number, ticketId: number, executor:
     )) as unknown as Array<Record<string, unknown>>;
 }
 
-export async function addLink(
+/**
+ * The one INSERT every `ticket_link` row that is not a merge goes through.
+ *
+ * Split out of `addLink` so the RESERVED kinds (below) have somewhere to write
+ * from without the self-link test, the existence test and the idempotent upsert
+ * being spelled out a second time and drifting.
+ */
+async function writeLink(
   tenantId: number,
   actor: ActorContext,
   fromTicketId: number,
   input: { toTicketId: number; kind: string },
-  executor: Executor = db,
+  executor: Executor,
 ): Promise<void> {
   if (fromTicketId === input.toTicketId) throw new AppError(400, 'A ticket cannot link to itself');
-  // 'merged_from' is written by merge() alone: hand-crafting one would produce
-  // a merge with no manifest, which is a merge nobody can undo.
-  if (input.kind === 'merged_from') {
-    throw new AppError(400, 'Merge links are created by the merge action');
-  }
   const other = await scoped('tickets', tenantId, executor)
     .where('tickets.id', input.toTicketId)
     .first<{ id: number }>('tickets.id');
@@ -3731,11 +3734,100 @@ export async function addLink(
     .ignore();
 }
 
+/**
+ * The free-form link kinds: 'related', 'duplicate', 'blocks', 'child'.
+ *
+ * Two kinds are RESERVED, and for the same reason: for them the row is not the
+ * whole act, so a row written behind the act's back leaves the desk holding a
+ * link that nothing explains and no counter reflects.
+ *
+ *   'merged_from'  is written by merge() alone: hand-crafting one would produce
+ *                  a merge with no manifest, which is a merge nobody can undo.
+ *
+ *   'caused_by'    is the problem module's spine. It carries an invariant no
+ *                  unique index can express — an incident hangs under AT MOST
+ *                  ONE problem, because with two, the first one's closure
+ *                  cascade resolves an incident the second is still causing —
+ *                  it feeds the three rollups on `problems` that the problem
+ *                  list and the dashboard read, and it owes the incident the
+ *                  decision_log row that answers "why does my ticket point at
+ *                  PRB-12?" (HARD RULE 2). This function supplies none of the
+ *                  three, and it is reached from a route gated on `ticket_rw`,
+ *                  which every agent holds and which deliberately does NOT
+ *                  imply `problem_rw`. `POST /api/problems/:ticketId/incidents`
+ *                  does all of it in one transaction; the problem module's own
+ *                  writes come back through `addProblemLink` below.
+ */
+export async function addLink(
+  tenantId: number,
+  actor: ActorContext,
+  fromTicketId: number,
+  input: { toTicketId: number; kind: string },
+  executor: Executor = db,
+): Promise<void> {
+  if (input.kind === 'merged_from') {
+    throw new AppError(400, 'Merge links are created by the merge action');
+  }
+  if (input.kind === PROBLEM_LINK_KIND) {
+    throw new AppError(
+      400,
+      'Incident to problem links are created from the problem, not from the ticket link list',
+      { code: 'validation_failed' },
+    );
+  }
+  return writeLink(tenantId, actor, fromTicketId, input, executor);
+}
+
+/**
+ * The problem module's door to `ticket_link`.
+ *
+ * The same row and the same idempotency as `addLink`, reachable only from a
+ * caller that has ALREADY applied the one-problem-per-incident guard, will
+ * recompute the rollups and will write the incident its decision row — which is
+ * exactly what `addLink` cannot promise, and why it refuses the kind. The
+ * signature mirrors `addLink` so the module's call sites swap name for name.
+ */
+export async function addProblemLink(
+  tenantId: number,
+  actor: ActorContext,
+  fromTicketId: number,
+  input: { toTicketId: number; kind: string },
+  executor: Executor = db,
+): Promise<void> {
+  if (input.kind !== PROBLEM_LINK_KIND) {
+    throw new AppError(400, 'This entry point writes incident to problem links only');
+  }
+  return writeLink(tenantId, actor, fromTicketId, input, executor);
+}
+
+/**
+ * Drop a link by id.
+ *
+ * 'caused_by' is refused for the mirror image of the reason `addLink` refuses
+ * it: detaching an incident moves `problems.incident_count`, `first_incident_at`
+ * and `last_incident_at`, and owes the incident a decision row saying it was
+ * detached. This function is handed a link id and no actor, so it can write
+ * neither; `DELETE /api/problems/:ticketId/incidents` writes both in one
+ * transaction. The kind is read before the delete rather than filtered in the
+ * WHERE clause on purpose: a silent 0 would reach the controller as "link not
+ * found" and tell the caller the opposite of what happened.
+ */
 export async function removeLink(
   tenantId: number,
   linkId: number,
   executor: Executor = db,
 ): Promise<number> {
+  const link = (await scoped('ticket_link', tenantId, executor)
+    .where('ticket_link.id', linkId)
+    .first('ticket_link.kind')) as { kind: string } | undefined;
+  if (!link) return 0;
+  if (link.kind === PROBLEM_LINK_KIND) {
+    throw new AppError(
+      409,
+      'Detaching an incident from its problem is done from the problem, not from the ticket link list',
+      { code: 'conflict' },
+    );
+  }
   return scoped('ticket_link', tenantId, executor).where('ticket_link.id', linkId).del();
 }
 

@@ -386,8 +386,12 @@ export const bulkUndoSchema = z.object({
 export const createTicketLinkSchema = z.object({
   toTicketId: idSchema,
   // `merged_from` is absent on purpose: merge links are written by merge(),
-  // together with the manifest that makes them reversible.
-  kind: z.enum(['related', 'duplicate', 'blocks', 'caused_by', 'child']),
+  // together with the manifest that makes them reversible. `caused_by` is
+  // absent for the same shape of reason: an incident to problem link carries
+  // rollups, a decision row and an anti-double-link guard, and only
+  // `POST /api/problems/:ticketId/incidents` supplies them. Refusing it here
+  // makes it a readable field error instead of a 400 from three frames down.
+  kind: z.enum(['related', 'duplicate', 'blocks', 'child']),
 });
 
 export const watcherSchema = z

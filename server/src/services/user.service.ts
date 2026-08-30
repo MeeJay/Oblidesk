@@ -24,6 +24,7 @@
 import bcrypt from 'bcrypt';
 import type { Knex } from 'knex';
 import { db, scoped, insertScoped, assertTenantId } from '../db';
+import { AppError } from '../middleware/errorHandler';
 import type {
   CreateUserRequest,
   UpdateUserRequest,
@@ -520,6 +521,27 @@ export const userService = {
         },
         trx,
       );
+
+      // A pending approval step naming this person, with no group behind them,
+      // is the one thing the purge genuinely must not blank: the FK would set
+      // it to null and strand a running approval nobody can decide. Postgres
+      // already refuses it through approval_steps_approver_ck, but from inside
+      // the RI trigger, where the only thing the operator sees is a 23514 and a
+      // 500. Asking first turns that into a sentence they can act on.
+      const stranded = (await trx('approval_steps')
+        .where('approval_steps.approver_user_id', id)
+        .where('approval_steps.state', 'pending')
+        .whereNull('approval_steps.approver_group_id')
+        .count<[{ count: string }]>('* as count')) as unknown as [{ count: string }];
+
+      if (Number(stranded[0].count) > 0) {
+        throw new AppError(
+          409,
+          `This account is the only approver on ${stranded[0].count} approval step(s) that are still ` +
+            'pending. Reassign or cancel those approvals first, then remove the account.',
+          { code: 'conflict' },
+        );
+      }
 
       await trx('users').where({ id }).del();
       permissionService.invalidate(id);

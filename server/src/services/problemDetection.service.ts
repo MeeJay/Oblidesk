@@ -83,6 +83,11 @@
  * REFUSED, never guessed at. The slug and version are stamped on every card and
  * every decision row, so a card can be replayed against the configuration that
  * produced it.
+ *
+ * A tenant that never published one runs on the SHIPPED baseline, stamped as
+ * version 0: a detector nobody configured is a detector at its defaults, not a
+ * detector that is off. Turning it off is `enabled: false` in a published body
+ * — a decision somebody took and can be read back. An absent row is not.
  */
 
 import type { Knex } from 'knex';
@@ -467,6 +472,41 @@ const CANDIDATE_COLUMNS = 'problem_candidates.*';
 // ═════════════════════════════════════════════════════════════════════════════
 
 /**
+ * Absorption layer one, as a correlated predicate the queries that need it
+ * SHARE.
+ *
+ * An incident already hanging `caused_by` under a problem belongs to that
+ * problem: `linkIncidents` refuses to attach it a second time
+ * (`linked_to_another_problem`) and `promote` refuses to found a problem on it
+ * at all. A candidate that counts such an incident promises a number the accept
+ * path cannot deliver.
+ *
+ * The window read applied it; the trigram probe did not, so a cluster poured
+ * another problem's incidents into the anchor and inflated three numbers at
+ * once: the count printed on the card, the saturation the score is built out
+ * of, and the bar a later escalation has to clear over the headstone. One
+ * predicate, both callers, so they cannot drift apart again.
+ *
+ * `tickets` is the alias both callers give the incident table, which is what
+ * lets a correlated predicate be written once.
+ */
+function notUnderAProblem(
+  tenantId: number,
+  executor: Executor,
+): (qb: Knex.QueryBuilder) => void {
+  return (qb: Knex.QueryBuilder): void => {
+    void qb
+      .select(executor.raw('1'))
+      .from('ticket_link')
+      // A joined tenant table is re-scoped by hand — `scoped()` only owns the
+      // query root (see the note on `scopedAs` in server/src/db/index.ts).
+      .where('ticket_link.tenant_id', tenantId)
+      .where('ticket_link.kind', PROBLEM_LINK_KIND)
+      .whereRaw('ticket_link.from_ticket_id = tickets.id');
+  };
+}
+
+/**
  * The most recent `MAX_WINDOW_TICKETS` incidents of the window.
  *
  * THE bound of the whole engine. `tickets_tenant_type_occurred` (migration 006)
@@ -489,16 +529,7 @@ async function readWindowTickets(
     .whereIn('tickets.record_type', INCIDENT_RECORD_TYPES)
     .whereRaw('coalesce(tickets.occurred_at, tickets.created_at) >= ?', [from])
     .whereRaw('coalesce(tickets.occurred_at, tickets.created_at) <= ?', [to])
-    .whereNotExists((qb) =>
-      // A joined tenant table is re-scoped by hand — `scoped()` only owns the
-      // query root (see the note on `scopedAs` in server/src/db/index.ts).
-      qb
-        .select(executor.raw('1'))
-        .from('ticket_link')
-        .where('ticket_link.tenant_id', tenantId)
-        .where('ticket_link.kind', PROBLEM_LINK_KIND)
-        .whereRaw('ticket_link.from_ticket_id = tickets.id'),
-    )
+    .whereNotExists(notUnderAProblem(tenantId, executor))
     .orderByRaw('coalesce(tickets.occurred_at, tickets.created_at) DESC')
     .limit(MAX_WINDOW_TICKETS)
     .select(
@@ -912,6 +943,12 @@ function enrichReopenPressure(
  * Deliberately NOT a nightly clustering pass over every subject: O(n²) over
  * 50 000 subjects is the number one technical reason these features get
  * switched off, and a cluster nobody anchors is a cluster nobody can act on.
+ *
+ * The probe obeys absorption layer one, exactly as the window read does. Without
+ * it the cluster was the one door through which another problem's incidents
+ * re-entered the pass: they inflated `observed` (so the score), `incident_count`
+ * (so the card's promise) and the headstone bar a later escalation must clear,
+ * and then `linkIncidents` refused every one of them at acceptance.
  */
 async function enrichSubjectCluster(
   tenantId: number,
@@ -935,6 +972,7 @@ async function enrichSubjectCluster(
     .whereRaw('coalesce(tickets.occurred_at, tickets.created_at) <= ?', [to])
     .whereRaw('tickets.subject % ?', [seed])
     .whereRaw('similarity(tickets.subject, ?) >= ?', [seed, minSimilarity])
+    .whereNotExists(notUnderAProblem(tenantId, executor))
     .orderByRaw('similarity(tickets.subject, ?) DESC', [seed])
     .limit(MAX_CLUSTER_SCAN)
     .select(
@@ -1136,6 +1174,45 @@ async function dedupeKeysWithOpenProblem(
   return out;
 }
 
+/**
+ * The problems a set of incidents already hangs under. ONE query, two callers,
+ * one flag between them — they were asking the same question in two places and
+ * getting two different answers.
+ *
+ * `liveOnly: true` is the ABSORPTION question, and it is the one
+ * `problem_alert_signatures` cannot answer. That table is a CURATED bond: an
+ * engineer declared a dedupe key equivalent to a known error, and nothing writes
+ * it automatically — not `promote`, not `acceptCandidate`. So the ordinary path
+ * (an agent promotes the incident an alert opened) left the key unbound, and the
+ * alert family also escapes absorption layer one because its incidents come from
+ * `suite_alerts.ticket_id` rather than from the window read. The result was a
+ * card sitting right beside the problem that already owned the signal. A
+ * TERMINAL problem does not absorb, for the reason `ciIdsWithOpenProblem` gives:
+ * a key that comes back six weeks after its problem closed is a new problem.
+ *
+ * `liveOnly: false` is the ACCEPT question, and it must mirror
+ * `problem.service`'s `problemsLinkedTo` exactly — category plays no part there,
+ * because an incident cannot hang under two problems whatever state they are in.
+ * That function is not exported, so this is the second spelling of it; if it
+ * moves, this moves with it.
+ *
+ * HARD RULE 5 — the category decides, never the slug.
+ */
+/**
+ * Borrowed from `problem.service`, which owns the concept, through the lazy
+ * accessor below. This used to be a private copy of the same query; the comment
+ * on it said "if it moves, this moves with it", which is a promise no file can
+ * keep on its own.
+ */
+function problemsHoldingIncidents(
+  tenantId: number,
+  incidentIds: readonly number[],
+  opts: { liveOnly: boolean },
+  executor: Executor,
+): Promise<Map<number, number[]>> {
+  return problemService().problemsHoldingIncidents(tenantId, incidentIds, opts, executor);
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // SECTION 9 — One pass
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1212,9 +1289,16 @@ export async function runForTenant(
   );
 
   // ── 3. Absorption, before anything is enriched or scored ──────────────────
+  //
+  // An alert anchor carries a CI too (`max(suite_alerts.ci_id)`), and the open
+  // problem sitting on that CI absorbs it for exactly the reason it absorbs a
+  // CI anchor. Asking for both families in ONE query also keeps this at one
+  // round trip.
   const occupiedCis = await ciIdsWithOpenProblem(
     tenantId,
-    ciAnchors.map((a) => a.ciId).filter((id): id is number => id !== null),
+    [...ciAnchors, ...alertAnchors]
+      .map((a) => a.ciId)
+      .filter((id): id is number => id !== null),
     db,
   );
   const occupiedKeys = await dedupeKeysWithOpenProblem(
@@ -1228,9 +1312,28 @@ export async function runForTenant(
     db,
   );
 
+  // The alert family's incidents never went through the window read, so
+  // absorption layer one never saw them. Asked here, once, over every incident
+  // the alert anchors carry: if one of them already hangs under a live problem,
+  // that problem is what this key is doing and a card beside it is a duplicate.
+  // The known-error family is deliberately NOT asked — it is BUILT out of
+  // incidents linked to a published known error, and absorbing them would delete
+  // the signal rather than de-duplicate it.
+  const alertIncidentsHeld = await problemsHoldingIncidents(
+    tenantId,
+    [...new Set(alertAnchors.flatMap((a) => [...a.tickets.keys()]))],
+    { liveOnly: true },
+    db,
+  );
+
   let anchors = [
     ...ciAnchors.filter((a) => a.ciId === null || !occupiedCis.has(a.ciId)),
-    ...alertAnchors.filter((a) => !occupiedKeys.has(a.signature)),
+    ...alertAnchors.filter(
+      (a) =>
+        !occupiedKeys.has(a.signature) &&
+        (a.ciId === null || !occupiedCis.has(a.ciId)) &&
+        ![...a.tickets.keys()].some((id) => alertIncidentsHeld.has(id)),
+    ),
     ...missAnchors,
   ];
 
@@ -1309,19 +1412,39 @@ export async function runForTenant(
     }
 
     const live = await findLiveCandidate(tenantId, anchor.signature, db);
+    let retires: number | null = null;
     if (live) {
-      // A re-detection BUMPS. It never inserts a second card (the partial
-      // unique index would refuse it anyway) and it writes no decision row:
-      // see the volumetric ruling in the module header.
-      if (!dryRun) {
-        await bumpCandidate(tenantId, live.id, anchor, score.score, contributions, {
-          windowStart,
-          windowEnd,
-          now,
-        });
+      if (live.state === 'proposed') {
+        // A re-detection BUMPS. It never inserts a second card (the partial
+        // unique index would refuse it anyway) and it writes no decision row:
+        // see the volumetric ruling in the module header.
+        if (!dryRun) {
+          await bumpCandidate(tenantId, live.id, anchor, score.score, contributions, {
+            windowStart,
+            windowEnd,
+            now,
+          });
+        }
+        outcome.bumped += 1;
+        continue;
       }
-      outcome.bumped += 1;
-      continue;
+
+      // An ACCEPTED card holds the signature through `problem_candidates_live_uq`,
+      // and nothing ever moved a card out of that state: every signature that
+      // once became a problem went blind FOR EVER — no card, no decision row,
+      // not even a census line — which is precisely the recurrence
+      // `ciIdsWithOpenProblem` releases the CI in order to catch.
+      //
+      // So an accepted card holds its signature only while the problem it
+      // produced is live. Once that problem is terminal or gone the card is
+      // retired to `expired`, and that retirement happens inside the proposal's
+      // OWN transaction rather than here: a pass that ends up suppressing or
+      // withholding must leave the board exactly as it found it.
+      if (await acceptedCandidateHolds(tenantId, live, db)) {
+        outcome.bumped += 1;
+        continue;
+      }
+      retires = live.id;
     }
 
     const headstone = await findHeadstone(tenantId, anchor.signature, db);
@@ -1348,17 +1471,25 @@ export async function runForTenant(
       continue;
     }
 
-    if (!dryRun) {
-      await proposeCandidate(tenantId, detector, anchor, score.score, contributions, {
-        windowStart,
-        windowEnd,
-        now,
-        supersedes: verdict.action === 'escalate' ? verdict.supersedes : null,
-        escalationReason: verdict.action === 'escalate' ? verdict.reason : null,
-        escalationFactor: body.rejection.escalationFactor,
-        headstoneScore: headstone?.score ?? null,
-      });
-    }
+    const proposed = dryRun
+      ? true
+      : await proposeCandidate(tenantId, detector, anchor, score.score, contributions, {
+          windowStart,
+          windowEnd,
+          now,
+          supersedes: verdict.action === 'escalate' ? verdict.supersedes : null,
+          escalationReason: verdict.action === 'escalate' ? verdict.reason : null,
+          escalationFactor: body.rejection.escalationFactor,
+          headstoneScore: headstone?.score ?? null,
+          retires,
+        });
+
+    // Counted only when the card really exists (HARD RULE 2). Losing the
+    // unique-index race means another pass created it: a census row claiming a
+    // card this pass did not write asserts something that did not happen, and
+    // the quota slot must not be spent on it either — that would push a genuine
+    // anchor to `withheld` on the strength of a card we never made.
+    if (!proposed) continue;
     created += 1;
     outcome.proposed += 1;
     if (verdict.action === 'escalate') outcome.escalated += 1;
@@ -1456,6 +1587,36 @@ async function findLiveCandidate(
 }
 
 /**
+ * Does an ACCEPTED card still hold its signature?
+ *
+ * It does while the problem it produced is live: a re-detection then is that
+ * problem's own incidents coming round again, and a second card beside it would
+ * be a duplicate of a decision already taken. It stops holding the moment the
+ * problem reaches a terminal category or is deleted — incidents landing on a
+ * signature six weeks after its problem was closed are a NEW problem, which is
+ * the same ruling `ciIdsWithOpenProblem` makes for the CI family and the reason
+ * the comment there exists.
+ *
+ * HARD RULE 5 — the problem's status CATEGORY decides, never its slug.
+ */
+async function acceptedCandidateHolds(
+  tenantId: number,
+  candidate: ProblemCandidate,
+  executor: Executor,
+): Promise<boolean> {
+  // `problem_candidates_accepted_ck` makes this unreachable; a card that got
+  // there anyway holds nothing, because there is no problem to point a reader at.
+  if (candidate.problemTicketId === null) return false;
+
+  const row = (await scopedAs('tickets', 'pt', tenantId, executor)
+    .where('pt.id', candidate.problemTicketId)
+    .whereNull('pt.deleted_at')
+    .whereIn('pt.status_category', LIVE_CATEGORIES)
+    .first('pt.id')) as { id: number } | undefined;
+  return row !== undefined;
+}
+
+/**
  * The headstone: the most recently decided card for this signature that still
  * carries a suppression. Never deleted, which is the whole point — it is the
  * memory of a human "no", and `evaluateCandidateSuppression` is the only door
@@ -1520,7 +1681,7 @@ async function bumpCandidate(
   bounds: WindowBounds,
 ): Promise<void> {
   await db.transaction(async (trx) => {
-    await scoped('problem_candidates', tenantId, trx)
+    const bumped = (await scoped('problem_candidates', tenantId, trx)
       .where('problem_candidates.id', candidateId)
       .where('problem_candidates.state', 'proposed')
       .update({
@@ -1535,7 +1696,15 @@ async function bumpCandidate(
         ci_id: anchor.ciId,
         dedupe_key: anchor.dedupeKey,
         queue_slug: anchor.queueSlug,
-      });
+      })) as unknown as number;
+
+    // The UPDATE is guarded on `proposed`, so a card decided between the read
+    // and here matches nothing — and the evidence write has to be guarded on the
+    // same fact, in the same transaction. It was not, so today's incidents were
+    // appended to cards a human had already decided: the list that justified a
+    // promotion was rewritten weeks after the promotion, and the card on the
+    // board stopped agreeing with the `decision_log` row that froze it.
+    if (bumped === 0) return;
 
     await writeCandidateTickets(tenantId, candidateId, anchor, contributions, trx);
   });
@@ -1546,12 +1715,22 @@ interface ProposeContext extends WindowBounds {
   escalationReason: 'score' | 'incidents' | null;
   escalationFactor: number;
   headstoneScore: number | null;
+  /**
+   * An `accepted` card whose problem is no longer live, holding this signature
+   * in the partial unique index. Retired here so the insert can happen at all.
+   */
+  retires: number | null;
 }
 
 /**
  * Create the card, its incident links and its `decision_log` row in ONE
  * transaction (HARD RULE 2): a card that exists without the row explaining it
  * is a card nobody can argue with.
+ *
+ * Returns whether the card was actually created. It is not a formality: the
+ * caller counts proposals into the census row and spends the pass's quota on
+ * them, and the one path that writes nothing here (losing the unique-index race)
+ * used to be counted as a proposal all the same.
  */
 async function proposeCandidate(
   tenantId: number,
@@ -1560,11 +1739,27 @@ async function proposeCandidate(
   score: number,
   contributions: ReadonlyMap<number, number>,
   ctx: ProposeContext,
-): Promise<void> {
+): Promise<boolean> {
   const ticketIds = [...anchor.tickets.keys()];
+  let didCreate = false;
 
   try {
     await db.transaction(async (trx) => {
+      if (ctx.retires !== null) {
+        // Freeing the signature and re-proposing it are ONE act: `expired` is
+        // written in the same transaction as the card that replaces it, and the
+        // proposal's decision row names the card it retired. Retiring it any
+        // earlier would leave a state change nothing explains on a pass that
+        // then decided not to propose at all.
+        const freed = (await scoped('problem_candidates', tenantId, trx)
+          .where('problem_candidates.id', ctx.retires)
+          .where('problem_candidates.state', 'accepted')
+          .update({ state: 'expired', last_seen_at: ctx.now })) as unknown as number;
+        // Somebody decided it between the read and here. The index still owns
+        // the signature and there is nothing to propose.
+        if (freed === 0) return;
+      }
+
       const inserted = (await insertScoped(
         'problem_candidates',
         tenantId,
@@ -1640,6 +1835,10 @@ async function proposeCandidate(
             signature: anchor.signature,
             family: anchor.family,
             score: scale4(score),
+            // The accepted card this proposal had to retire to free the
+            // signature, when there was one. The `expired` transition happened
+            // in THIS transaction and this is the row that explains it.
+            ...(ctx.retires !== null ? { retiredCandidateId: ctx.retires } : {}),
             signals: anchor.signals as unknown as Record<string, unknown>,
             // The incidents that made the case, named on the row itself: the
             // `signals` map carries them per signal, this carries the union, and
@@ -1657,21 +1856,26 @@ async function proposeCandidate(
           });
         },
       );
+
+      didCreate = true;
     });
   } catch (error) {
     // `problem_candidates_live_uq` is the last word on "one live card per
     // signature". Losing that race means somebody else created the card we were
     // about to create, which is the outcome we wanted: log it and move on
-    // rather than failing a whole pass over a duplicate we did not want.
+    // rather than failing a whole pass over a duplicate we did not want. The
+    // transaction rolled back, so this pass wrote NOTHING — and says so.
     if ((error as { code?: string }).code === '23505') {
       logger.debug(
         { tenantId, signature: anchor.signature },
         'problem detection: a concurrent pass already created this card',
       );
-      return;
+      return false;
     }
     throw error;
   }
+
+  return didCreate;
 }
 
 /**
@@ -1913,6 +2117,18 @@ interface ProblemServiceLike {
     problemTicketId: number,
     executor?: Executor,
   ): Promise<ProblemWithRelations | null>;
+  /**
+   * THE anti-double-link guard. Reached through this interface rather than
+   * copied, because a local second spelling of it was exactly how the two
+   * services came to disagree about whether an incident may hang under two
+   * problems.
+   */
+  problemsHoldingIncidents(
+    tenantId: number,
+    incidentIds: readonly number[],
+    opts: { liveOnly: boolean },
+    executor: Executor,
+  ): Promise<Map<number, number[]>>;
 }
 
 let problemModule: ProblemServiceLike | null | undefined;
@@ -1946,6 +2162,12 @@ function problemService(): ProblemServiceLike {
  * That is why the earliest incident is handed to `promote()` as the source and
  * the rest ride along in `alsoLinkIncidentIds` — one transaction, one set of
  * rollups, one decision trail.
+ *
+ * The source is the earliest incident that is FREE. An incident already hanging
+ * under a problem cannot found a second one, and a card can be made entirely of
+ * such incidents (that is what `known_error_miss` detects), so the refusal is
+ * spelled out here in a sentence a reviewer can act on rather than surfacing as
+ * a conflict raised half-way through creating a problem record.
  */
 export async function acceptCandidate(
   tenantId: number,
@@ -1991,13 +2213,52 @@ export async function acceptCandidate(
       );
     }
 
-    const [sourceIncidentId, ...alsoLink] = incidentIds;
+    // Which of them already hang under a problem?
+    //
+    // `promote` refuses to found a problem on such an incident and
+    // `linkIncidents` refuses to attach one, both for the same reason: an
+    // incident under two live problems is auto-resolved by whichever is fixed
+    // first while the other is still open and still hurting it. The card cannot
+    // know that on its own — a `known_error_miss` anchor is built ENTIRELY out
+    // of incidents linked to the published known error it fired on — so this is
+    // asked here, before anything is created, rather than discovered as a 409
+    // from three frames down with a problem record already written.
+    const heldByAnotherProblem = await problemsHoldingIncidents(
+      tenantId,
+      incidentIds,
+      { liveOnly: false },
+      tx,
+    );
+    const free = incidentIds.filter((id) => !heldByAnotherProblem.has(id));
+
+    if (free.length === 0) {
+      throw conflict(
+        'Every incident on this card already hangs under another problem. Unlink one of them first, or work the problem it is under.',
+        {
+          code: 'incidents_already_under_a_problem',
+          candidateId,
+          problemTicketIds: [...new Set([...heldByAnotherProblem.values()].flat())],
+        },
+      );
+    }
+
+    // HARD RULE 6 — the earliest incident the problem can actually be founded
+    // on. When the true earliest is already spoken for, `occurred_at` comes from
+    // the earliest FREE one: later than the condition really started, and the
+    // only honest answer available while that incident belongs to another
+    // problem.
+    const sourceIncidentId = free[0];
+    // The held ones still ride along. `linkIncidents` skips each with
+    // `linked_to_another_problem` AND writes that refusal as a decision row on
+    // the incident, which is where "why is my ticket not under PRB-12?" gets
+    // asked. Dropping them here would answer that question nowhere.
+    const alsoLink = incidentIds.filter((id) => id !== sourceIncidentId);
 
     const promoted = await problemService().promote(
       tenantId,
       actor,
       {
-        incidentId: sourceIncidentId as number,
+        incidentId: sourceIncidentId,
         subject: input.subject ?? truncate(candidate.title, 512),
         symptomsMd: input.symptomsMd ?? null,
         queueSlug: input.queueSlug ?? candidate.queueSlug,
@@ -2053,7 +2314,11 @@ export async function acceptCandidate(
       (recorder) => {
         recorder.outcome({
           problemTicketId: promoted.ticketId,
-          linked: incidentIds.length,
+          // What was LINKED, not what the card named. The rest were refused by
+          // `linkIncidents`, and a row counting them would assert links that do
+          // not exist — the one thing worse than a missing row (HARD RULE 2).
+          linked: free.length,
+          heldByAnotherProblem: incidentIds.length - free.length,
           sourceIncidentId,
           detectedBy: 'recurrence',
         });
@@ -2181,13 +2446,24 @@ export async function rejectCandidate(
 // ═════════════════════════════════════════════════════════════════════════════
 
 /**
- * One pass per tenant that has published an ENABLED detector.
+ * One pass per tenant whose detector is ENABLED — published or shipped.
  *
- * Opting in through configuration rather than through a global switch is
- * deliberate: a desk that never seeded the object is never surprised by cards
- * appearing on a board it did not ask for. A manual kick
- * (`POST /api/problems/candidates/run`) still runs on the shipped baseline, so
- * an admin can see what the detector WOULD say before publishing anything.
+ * The shipped baseline used to be a reason to skip, and no seed writes a
+ * `problem_detection` object: the sweeper was armed and inert on every install,
+ * for every tenant, for ever. Nothing said so either — no cards, no census rows,
+ * no log line — and a detector that silently detects nothing is worse than one
+ * that was never started, because the board it feeds reads as "nothing is
+ * recurring" instead of "nobody is looking". So the baseline runs. It is the
+ * same body `runForTenant` has always accepted from the manual kick and the same
+ * one every threshold in `@oblidesk/shared` is written against.
+ *
+ * Turning the detector off is `enabled: false` in a published body: a decision
+ * somebody took, stamped with a slug and a version, and readable back off the
+ * card that did not appear. An absent row is not a decision, and reading it as
+ * one is how an engine ends up disabling itself in silence.
+ *
+ * `!detector` still skips, and means something else entirely: a body from a
+ * FUTURE format, which this release refuses to guess at.
  *
  * `tenants` is a global table, so `db('tenants')` is correct here — the same
  * enumeration `rollup.service` and `sla.service` use. Every read afterwards is
@@ -2204,7 +2480,7 @@ export async function runAllTenants(
     const tenantId = Number(tenant.id);
     try {
       const detector = await loadDetector(tenantId, undefined, db);
-      if (!detector || detector.builtin || !detector.body.enabled) continue;
+      if (!detector || !detector.body.enabled) continue;
 
       const outcome = await runForTenant(tenantId, { now: options.now });
       results.set(tenantId, outcome);

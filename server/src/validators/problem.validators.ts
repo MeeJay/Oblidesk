@@ -411,7 +411,8 @@ export const updateProblemCauseSchema = z
     baseRowVersion,
     parentCauseId: idSchema.nullish(),
     category: z.enum(CAUSE_CATEGORIES).optional(),
-    statement: z.string().trim().min(1).max(512).optional(),
+    /** May be cleared: an inline autosave passes through empty (HARD RULE 12). */
+    statement: z.string().trim().max(512).optional(),
     detailMd: markdown.nullish(),
     kind: z.enum(CAUSE_KINDS).optional(),
     sortOrder: z.coerce.number().int().min(0).max(100_000).optional(),
