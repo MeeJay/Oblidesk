@@ -50,6 +50,7 @@ import profileRoutes from './profile.routes';
 import settingsRoutes from './settings.routes';
 import auditRoutes from './audit.routes';
 import ticketsRoutes from './tickets.routes';
+import problemsRoutes from './problems.routes';
 import journalRoutes from './journal.routes';
 import attachmentsRoutes from './attachments.routes';
 import ciRoutes from './ci.routes';
@@ -145,6 +146,16 @@ tenantRouter.use('/audit', auditRoutes);
 
 // The desk itself.
 tenantRouter.use('/tickets', ticketsRoutes);
+
+// Problem management: the record behind a run of incidents, its root-cause
+// analyses, its known errors, and the detector's candidate cards. A problem IS
+// a ticket — `/problems/:ticketId` is a ticket id — but the module is mounted
+// beside `/tickets` rather than under it, because half of it is not about one
+// ticket at all: `/promote`, `/known-errors/suggest` and `/candidates` are
+// collection-level, and nesting them would have made every URL carry a ticket
+// id that the route had no use for.
+tenantRouter.use('/problems', problemsRoutes);
+
 tenantRouter.use('/journal', journalRoutes);
 tenantRouter.use('/attachments', attachmentsRoutes);
 tenantRouter.use('/ci', ciRoutes);

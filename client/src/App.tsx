@@ -115,6 +115,16 @@ const AssetDetailPage = lazy(() =>
   import('@/pages/AssetDetailPage').then((m) => ({ default: m.AssetDetailPage })),
 );
 
+// The problem module, split the same way and for the same reason: the board is
+// a page-paginated table nobody scrolls for an hour, while the folder carries
+// the RCA workshop and its evaluators. Neither belongs in the entry chunk.
+const ProblemsPage = lazy(() =>
+  import('@/pages/ProblemsPage').then((m) => ({ default: m.ProblemsPage })),
+);
+const ProblemDetailPage = lazy(() =>
+  import('@/pages/ProblemDetailPage').then((m) => ({ default: m.ProblemDetailPage })),
+);
+
 // ═════════════════════════════════════════════════════════════════════════════
 // Suspense
 // ═════════════════════════════════════════════════════════════════════════════
@@ -166,7 +176,6 @@ interface PlannedModule {
 }
 
 const PLANNED_MODULES: readonly PlannedModule[] = [
-  { path: '/problems', labelKey: 'nav.problems', label: 'Problèmes', phase: 2 },
   { path: '/changes', labelKey: 'nav.changes', label: 'Changements', phase: 2 },
   { path: '/knowledge', labelKey: 'nav.knowledge', label: 'Base de connaissances', phase: 3 },
   { path: '/catalog', labelKey: 'nav.catalog', label: 'Catalogue de services', phase: 3 },
@@ -372,6 +381,29 @@ export default function App() {
                 element={
                   <Page>
                     <AssetDetailPage />
+                  </Page>
+                }
+              />
+            </Route>
+
+            {/* ── Problems ──────────────────────────────────────────────── */}
+            {/* Gated on TICKET_READ, the same capability the server demands to
+                read one. Writing is PROBLEM_RW and is checked per action, not
+                per route: an agent who may read the folder still sees it. */}
+            <Route element={<ProtectedRoute requiredCapability={CAPABILITIES.TICKET_READ} />}>
+              <Route
+                path="/problems"
+                element={
+                  <Page>
+                    <ProblemsPage />
+                  </Page>
+                }
+              />
+              <Route
+                path="/problems/:id"
+                element={
+                  <Page>
+                    <ProblemDetailPage />
                   </Page>
                 }
               />

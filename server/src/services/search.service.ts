@@ -43,8 +43,15 @@ const MIN_TRIGRAM_LENGTH = 3;
 /** Longer than this and the user pasted a log file, not a query. */
 const MAX_QUERY_LENGTH = 512;
 
-/** The text-search configuration. Never 'english' — see the header. */
-const TS_CONFIG = 'simple';
+/**
+ * The text-search configuration. Never 'english' — see the header.
+ *
+ * Exported so a module that has to build its own predicate against a DIFFERENT
+ * tsvector column (`problems.search_tsv`, whose trigger uses the same
+ * configuration) spells it from here rather than from a second literal. Two
+ * literals drift, and the one that drifts is the one nobody reads.
+ */
+export const TS_CONFIG = 'simple';
 
 export interface TicketSearchRow {
   ticketId: number;
