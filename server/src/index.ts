@@ -34,6 +34,7 @@ import { logger } from './utils/logger';
 import { obligateService } from './services/obligate.service';
 import { outboxService } from './services/outbox.service';
 import { rollupService } from './services/rollup.service';
+import * as problemDetectionService from './services/problemDetection.service';
 import { slaTicker } from './services/sla.service';
 import { ruleScheduler } from './services/rule.service';
 import { escalationService } from './services/escalation.service';
@@ -348,6 +349,23 @@ async function main(): Promise<void> {
       'Rule scheduler',
       workers,
       { intervalMs: config.ruleScheduleIntervalMs },
+    );
+
+    // The recurrence detector: the ONLY thing that asks "do these incidents
+    // tell one story?". Without it the module still works by hand, but its
+    // whole point — noticing before a human does — never happens, and the
+    // candidate inbox stays permanently empty with nothing to explain why.
+    //
+    // Under the leader lock like every other sweep: two replicas detecting
+    // means the same recurrence proposed twice, and a candidate proposed twice
+    // is a candidate nobody trusts.
+    await startWorker(
+      {
+        start: () => problemDetectionService.startSweeper(),
+        stop: () => problemDetectionService.stopSweeper(),
+      },
+      'Problem detector',
+      workers,
     );
 
     // The escalation ticker: armed ladders whose next step has come due, plus

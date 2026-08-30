@@ -279,11 +279,28 @@ export async function isMasterTenant(tenantId: number): Promise<boolean> {
  * this file — and it encodes the rule that only the master tenant may share,
  * in the query itself rather than in a comment.
  */
-async function sharedFromMaster(tenantId: number, executor: Executor = db): Promise<Knex.QueryBuilder | null> {
+/**
+ * The builder is returned INSIDE an object, and that is not decoration.
+ *
+ * A Knex query builder is thenable. An `async` function that returns one hands
+ * back a promise whose resolution chains straight into the builder, so
+ * `await sharedFromMaster(...)` does not yield the builder at all: it RUNS the
+ * query and yields the rows. Every caller then dies on `.select is not a
+ * function`, and only for a tenant that is not the master, which is why this
+ * survived for as long as the install had a single tenant.
+ *
+ * Wrapping makes the value inert, so the trap cannot come back.
+ */
+async function sharedFromMaster(
+  tenantId: number,
+  executor: Executor = db,
+): Promise<{ query: Knex.QueryBuilder } | null> {
   const master = await masterTenantId();
   if (master === null || master === tenantId) return null;
-  return scoped('config_objects', master, executor)
-    .whereRaw('config_objects.target_tenant_ids @> ?::int[]', [`{${tenantId}}`]);
+  return {
+    query: scoped('config_objects', master, executor)
+      .whereRaw('config_objects.target_tenant_ids @> ?::int[]', [`{${tenantId}}`]),
+  };
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -500,9 +517,9 @@ export async function listConfigObjects(
   const objects = rows.map(rowToConfigObject);
 
   if (filters.includeShared !== false) {
-    const sharedQuery = await sharedFromMaster(actor.tenantId);
-    if (sharedQuery) {
-      const sharedRows = (await applyFilters(sharedQuery, filters)
+    const shared = await sharedFromMaster(actor.tenantId);
+    if (shared) {
+      const sharedRows = (await applyFilters(shared.query, filters)
         .select(SELECT_COLUMNS)) as ConfigObjectRow[];
       const localKeys = new Set(objects.map((object) => `${object.kind}:${object.slug.toLowerCase()}`));
       for (const row of sharedRows) {
@@ -537,9 +554,9 @@ export async function getConfigObject(
     .first()) as ConfigObjectRow | undefined;
   if (own) return rowToConfigObject(own);
 
-  const sharedQuery = await sharedFromMaster(actor.tenantId);
-  if (!sharedQuery) return null;
-  const shared = (await sharedQuery
+  const fromMaster = await sharedFromMaster(actor.tenantId);
+  if (!fromMaster) return null;
+  const shared = (await fromMaster.query
     .select(SELECT_COLUMNS)
     .where('config_objects.kind', kind)
     .where('config_objects.slug', slug)
@@ -582,9 +599,9 @@ export async function loadPublished(
 ): Promise<Map<string, PublishedBody>> {
   const out = new Map<string, PublishedBody>();
 
-  const sharedQuery = await sharedFromMaster(tenantId, executor);
-  if (sharedQuery) {
-    const sharedRows = (await sharedQuery
+  const shared = await sharedFromMaster(tenantId, executor);
+  if (shared) {
+    const sharedRows = (await shared.query
       .select(SELECT_COLUMNS)
       .where('config_objects.kind', kind)
       .where('config_objects.status', 'published')) as ConfigObjectRow[];
